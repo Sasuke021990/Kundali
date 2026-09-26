@@ -1,0 +1,4 @@
+pyswisseph>=2.10.3
+geopy>=2.4
+timezonefinder>=6.2
+matplotlib>=3.7
