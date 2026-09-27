@@ -40,6 +40,16 @@ python kundli.py \
   --output_file kundli.png
 ```
 
+## JSON
+
+`get_kundli_json` uses the same calculation as the PNG and returns a JSON string: birth metadata, lagna, nine grahas, and twelve whole-sign houses.
+
+```python
+from kundli import get_kundli_json
+
+print(get_kundli_json("1990-04-02", "06:30", "Gadag, Karnataka"))
+```
+
 ## Use as a library
 
 ```python

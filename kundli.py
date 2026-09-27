@@ -15,6 +15,7 @@ files. Lahiri mode is set explicitly on every calculation.
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 import sys
@@ -95,6 +96,78 @@ KETU_NAME = "Ketu"
 KETU_ABBREVIATION = "Ke"
 INHERENTLY_RETROGRADE = frozenset({"Rahu", "Ketu"})
 EXPECTED_ABBREVIATIONS = ("Su", "Mo", "Ma", "Me", "Ju", "Ve", "Sa", "Ra", "Ke")
+PLANET_NAMES: tuple[str, ...] = tuple(name for name, _abbr, _body in GRAHA_BODIES) + (KETU_NAME,)
+
+# 27 nakshatras of 13°20'. The second value is the Vimshottari nakshatra lord.
+NAKSHATRAS: tuple[tuple[str, str], ...] = (
+    ("Ashwini", "Ketu"),
+    ("Bharani", "Venus"),
+    ("Krittika", "Sun"),
+    ("Rohini", "Moon"),
+    ("Mrigashira", "Mars"),
+    ("Ardra", "Rahu"),
+    ("Punarvasu", "Jupiter"),
+    ("Pushya", "Saturn"),
+    ("Ashlesha", "Mercury"),
+    ("Magha", "Ketu"),
+    ("Purva Phalguni", "Venus"),
+    ("Uttara Phalguni", "Sun"),
+    ("Hasta", "Moon"),
+    ("Chitra", "Mars"),
+    ("Swati", "Rahu"),
+    ("Vishakha", "Jupiter"),
+    ("Anuradha", "Saturn"),
+    ("Jyeshtha", "Mercury"),
+    ("Mula", "Ketu"),
+    ("Purva Ashadha", "Venus"),
+    ("Uttara Ashadha", "Sun"),
+    ("Shravana", "Moon"),
+    ("Dhanishta", "Mars"),
+    ("Shatabhisha", "Rahu"),
+    ("Purva Bhadrapada", "Jupiter"),
+    ("Uttara Bhadrapada", "Saturn"),
+    ("Revati", "Mercury"),
+)
+NAKSHATRA_SPAN = 360.0 / 27.0
+PADA_SPAN = NAKSHATRA_SPAN / 4.0
+
+SIGN_LORDS: dict[int, str] = {
+    1: "Mars",
+    2: "Venus",
+    3: "Mercury",
+    4: "Moon",
+    5: "Sun",
+    6: "Mercury",
+    7: "Venus",
+    8: "Mars",
+    9: "Jupiter",
+    10: "Saturn",
+    11: "Saturn",
+    12: "Jupiter",
+}
+# Whole-sign exaltation and debilitation. Own signs are the signs a graha rules.
+EXALTATION_SIGN: dict[str, int] = {
+    "Sun": 1,
+    "Moon": 2,
+    "Mars": 10,
+    "Mercury": 6,
+    "Jupiter": 4,
+    "Venus": 12,
+    "Saturn": 7,
+    "Rahu": 2,
+    "Ketu": 8,
+}
+DEBILITATION_SIGN: dict[str, int] = {
+    "Sun": 7,
+    "Moon": 8,
+    "Mars": 4,
+    "Mercury": 12,
+    "Jupiter": 10,
+    "Venus": 6,
+    "Saturn": 1,
+    "Rahu": 8,
+    "Ketu": 2,
+}
 
 # North Indian house polygons in chart coordinates (x right, y up).
 HOUSE_POLYGONS: dict[int, tuple[tuple[float, float], ...]] = {
@@ -1763,6 +1836,132 @@ def render_chart(
 # ---------------------------------------------------------------------------
 # Public API and CLI
 # ---------------------------------------------------------------------------
+
+
+def degree_in_sign(longitude: float) -> float:
+    """Degree within the current rashi, in ``[0, 30)``."""
+    return normalize_longitude(longitude) % 30.0
+
+
+def nakshatra_placement(longitude: float) -> tuple[str, int, str]:
+    """Return ``(nakshatra name, pada 1..4, nakshatra lord)`` for a sidereal longitude."""
+    longitude = normalize_longitude(longitude)
+    index = int(math.floor((longitude / NAKSHATRA_SPAN) + 1e-10))
+    if index >= len(NAKSHATRAS):
+        index = len(NAKSHATRAS) - 1
+    if index < 0:
+        raise ValueError(f"Nakshatra index {index} is invalid for longitude {longitude}.")
+    offset = longitude - (index * NAKSHATRA_SPAN)
+    pada = int(math.floor((offset / PADA_SPAN) + 1e-10)) + 1
+    if pada < 1 or pada > 4:
+        pada = min(4, max(1, pada))
+    name, lord = NAKSHATRAS[index]
+    return name, pada, lord
+
+
+def planet_dignity(name: str, rashi_index: int) -> str:
+    """Exalted, Debilitated, Own, or Neutral for ``name`` in ``rashi_index``."""
+    if EXALTATION_SIGN.get(name) == rashi_index:
+        return "Exalted"
+    if DEBILITATION_SIGN.get(name) == rashi_index:
+        return "Debilitated"
+    owned = [sign for sign, lord in SIGN_LORDS.items() if lord == name]
+    if rashi_index in owned:
+        return "Own"
+    return "Neutral"
+
+
+def houses_ruled_by(name: str, lagna_rashi_index: int) -> list[int]:
+    """Whole-sign houses whose rashi lord is ``name``. Rahu and Ketu rule none."""
+    signs = [sign for sign, lord in SIGN_LORDS.items() if lord == name]
+    return sorted(whole_sign_house(sign, lagna_rashi_index) for sign in signs)
+
+
+def _rounded_longitude(longitude: float) -> float:
+    value = round(normalize_longitude(longitude), 4)
+    if value >= 360.0:
+        return 0.0
+    return value
+
+
+def kundli_as_dict(chart: ChartData) -> dict[str, object]:
+    """Structured Kundli used by :func:`get_kundli_json`."""
+    validate_chart(chart)
+    lagna_total = _rounded_longitude(chart.lagna_longitude)
+    lagna_nakshatra, lagna_pada, _lagna_nakshatra_lord = nakshatra_placement(lagna_total)
+    planets: dict[str, object] = {}
+    occupants: dict[int, list[str]] = {house: [] for house in range(1, 13)}
+    for planet in chart.planets:
+        total = _rounded_longitude(planet.longitude)
+        nakshatra, pada, _lord = nakshatra_placement(total)
+        occupants[planet.house].append(planet.name)
+        planets[planet.name] = {
+            "sign": planet.rashi_name,
+            "sign_number": planet.rashi_index,
+            "house": planet.house,
+            "degree_in_sign": round(total % 30.0, 4),
+            "total_degree": total,
+            "nakshatra": nakshatra,
+            "pada": pada,
+            "is_retrograde": planet.retrograde,
+            "dignity": planet_dignity(planet.name, planet.rashi_index),
+            "lord_of_houses": houses_ruled_by(planet.name, chart.lagna_rashi_index),
+        }
+    if list(planets) != list(PLANET_NAMES):
+        raise ValueError(
+            f"Kundli JSON is missing grahas. Found {list(planets)}, expected {list(PLANET_NAMES)}."
+        )
+    houses = {
+        str(house): {
+            "sign": RASHI_NAMES[house_rashi_index(chart.lagna_rashi_index, house)],
+            "sign_number": house_rashi_index(chart.lagna_rashi_index, house),
+            "planets": occupants[house],
+        }
+        for house in range(1, 13)
+    }
+    payload: dict[str, object] = {
+        "metadata": {
+            "dob": chart.birth.dob,
+            "tob": chart.birth.tob,
+            "location": chart.location.resolved_name,
+            "coordinates": {
+                "latitude": round(chart.location.latitude, 4),
+                "longitude": round(chart.location.longitude, 4),
+            },
+            "timezone": chart.birth.timezone_name,
+            "utc_datetime": chart.birth.utc_datetime.isoformat(),
+            "ayanamsa": {
+                "system": "Lahiri (Chitra Paksha)",
+                "value_deg": round(chart.ayanamsa, 6),
+            },
+        },
+        "lagna": {
+            "sign": chart.lagna_rashi_name,
+            "sign_number": chart.lagna_rashi_index,
+            "degree_in_sign": round(lagna_total % 30.0, 4),
+            "nakshatra": lagna_nakshatra,
+            "pada": lagna_pada,
+            "ruling_planet": SIGN_LORDS[chart.lagna_rashi_index],
+        },
+        "planets": planets,
+        "houses": houses,
+    }
+    return payload
+
+
+def get_kundli_json(dob: str, tob: str, location: str) -> str:
+    """Return the sidereal Kundli for ``dob``, ``tob``, and ``location`` as JSON.
+
+    The string uses the same birth, geocoding, timezone, and Lahiri calculation
+    path as :func:`generate_kundli_chart`. It includes every graha and all
+    twelve whole-sign houses.
+
+    ``ruling_planet`` is the rashi lord of the lagna. ``dignity`` is Exalted,
+    Debilitated, Own, or Neutral. ``lord_of_houses`` lists the whole-sign
+    houses that graha rules from this lagna. Rahu and Ketu rule no signs.
+    """
+    chart = compute_chart(dob, tob, location)
+    return json.dumps(kundli_as_dict(chart), indent=2, ensure_ascii=False)
 
 
 def generate_kundli_chart(
