@@ -50,6 +50,21 @@ from kundli import get_kundli_json
 print(get_kundli_json("1990-04-02", "06:30", "Gadag, Karnataka"))
 ```
 
+## Timing telemetry
+
+`get_timing_telemetry` reads that natal JSON (a dict or a JSON string) and a target civil date in the natal timezone. It returns the active Vimshottari mahadasha, antardasha, and pratyantardasha, Lahiri gochara for all nine grahas measured from both the natal lagna and the natal Moon, and the daily lunar trigger (Tara Bala and Chandrashtama).
+
+Dasha lengths use the mean tropical year of 365.2425 days. The birth mahadasha is already partly elapsed by the Moon's position inside its nakshatra, so antardasha and pratyantardasha are not restarted at birth. Rahu is the mean node and Ketu is opposite Rahu. When `is_chandrashtama` is true, the transit Moon is in the 8th house from the natal Moon.
+
+```python
+import json
+from kundli import get_kundli_json, get_timing_telemetry
+
+natal = get_kundli_json("1998-04-10", "17:25", "Hubli, Karnataka")
+timing = get_timing_telemetry(natal, "2026-10-15", "09:00")
+print(json.dumps(timing, indent=2))
+```
+
 ## Use as a library
 
 ```python

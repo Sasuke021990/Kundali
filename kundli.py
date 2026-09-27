@@ -131,6 +131,32 @@ NAKSHATRAS: tuple[tuple[str, str], ...] = (
 )
 NAKSHATRA_SPAN = 360.0 / 27.0
 PADA_SPAN = NAKSHATRA_SPAN / 4.0
+# Vimshottari lords follow the nakshatra cycle. A year is the mean tropical year.
+DASHA_ORDER: tuple[str, ...] = tuple(lord for _name, lord in NAKSHATRAS[:9])
+DASHA_YEARS: dict[str, int] = {
+    "Ketu": 7,
+    "Venus": 20,
+    "Sun": 6,
+    "Moon": 10,
+    "Mars": 7,
+    "Rahu": 18,
+    "Jupiter": 16,
+    "Saturn": 19,
+    "Mercury": 17,
+}
+VIMSHOTTARI_YEAR_DAYS = 365.2425
+TARA_NAMES: tuple[str, ...] = (
+    "Janma (Vulnerability / Mental stress)",
+    "Sampat (Wealth / Material progress)",
+    "Vipat (Obstacles / Unplanned losses)",
+    "Kshema (Comfort / Protection & ease)",
+    "Pratyak (Friction / Resistance)",
+    "Sadhana (Accomplishment / Execution)",
+    "Naidhana (Crisis / High friction)",
+    "Mitra (Friendly / Cooperation)",
+    "Parama Mitra (Supreme favor / High gains)",
+)
+FAVORABLE_TARA_INDEXES = frozenset({1, 3, 5, 7, 8})
 
 SIGN_LORDS: dict[int, str] = {
     1: "Mars",
@@ -412,7 +438,7 @@ def _format_utc_offset(offset: object) -> str:
     return f"UTC{sign}{hours:02d}:{minutes:02d}"
 
 
-def _localize_birth(dob: str, tob: str, tz_name: str) -> datetime:
+def _localize_birth(dob: str, tob: str, tz_name: str, moment: str = "birth") -> datetime:
     """Attach ``tz_name`` and reject gaps or repeated civil times.
 
     The offset comes only from :class:`zoneinfo.ZoneInfo`. Standard time,
@@ -455,23 +481,23 @@ def _localize_birth(dob: str, tob: str, tz_name: str) -> datetime:
         round_trip = utc_moment.astimezone(zone).replace(tzinfo=None)
     except Exception as exc:
         raise ValueError(
-            f"Unable to convert local birth time {dob} {tob} in timezone {tz_name}: {exc}"
+            f"Unable to convert local {moment} time {dob} {tob} in timezone {tz_name}: {exc}"
         ) from exc
 
     if round_trip != naive:
         raise ValueError(
-            f"Nonexistent local birth time {tob} on {dob} in timezone {tz_name}. "
+            f"Nonexistent local {moment} time {tob} on {dob} in timezone {tz_name}. "
             "This civil time falls in a daylight-saving or historical offset gap "
             "and does not correspond to a real local time."
         )
     if offset_earlier != offset_later:
         raise ValueError(
-            f"Ambiguous local birth time {tob} on {dob} in timezone {tz_name}. "
+            f"Ambiguous local {moment} time {tob} on {dob} in timezone {tz_name}. "
             "This civil time occurs twice "
             f"(offsets {_format_utc_offset(offset_earlier)} and "
             f"{_format_utc_offset(offset_later)}) "
             "because of a daylight-saving or historical offset transition. "
-            "Choose a birth time outside the overlap."
+            f"Choose a {moment} time outside the overlap."
         )
     return earlier
 
@@ -2010,6 +2036,266 @@ def get_kundli_json(dob: str, tob: str, location: str) -> str:
     """
     chart = compute_chart(dob, tob, location)
     return json.dumps(kundli_as_dict(chart), indent=2, ensure_ascii=False)
+
+
+def _dasha_span_days(parent_days: float, lord: str) -> float:
+    """Length of ``lord`` as a sub-period of a span that totals 120 dasha years."""
+    return parent_days * (DASHA_YEARS[lord] / 120.0)
+
+
+def _walk_dasha_cycle(
+    start_lord: str, elapsed_days: float, parent_days: float
+) -> tuple[str, float]:
+    """Return the active lord and the days already elapsed inside that lord's span."""
+    if elapsed_days < -1e-6:
+        raise ValueError("Dasha elapsed time cannot be negative.")
+    elapsed_days = max(0.0, elapsed_days)
+    index = DASHA_ORDER.index(start_lord)
+    cursor = 0.0
+    for step in range(9):
+        lord = DASHA_ORDER[index]
+        span = _dasha_span_days(parent_days, lord)
+        if elapsed_days <= cursor + span + 1e-6 or step == 8:
+            return lord, max(0.0, elapsed_days - cursor)
+        cursor += span
+        index = (index + 1) % 9
+    raise ValueError("Unable to resolve a Vimshottari sub-period.")
+
+
+def _calculate_vimshottari_triple(
+    natal_moon_deg: float,
+    birth_utc: datetime,
+    target_utc: datetime,
+) -> dict[str, str]:
+    """Active Mahadasha, Antardasha, and Pratyantardasha at ``target_utc``.
+
+    The birth nakshatra lord's mahadasha is already partly elapsed. Antardasha
+    and pratyantardasha are counted from that point inside the full period, not
+    restarted at birth. Period lengths use the 365.2425-day mean tropical year.
+    """
+    moon = normalize_longitude(natal_moon_deg)
+    nak_index = int(math.floor((moon / NAKSHATRA_SPAN) + 1e-10)) % 27
+    degree_in_nakshatra = moon - (nak_index * NAKSHATRA_SPAN)
+    first_lord = DASHA_ORDER[nak_index % 9]
+    first_span_days = DASHA_YEARS[first_lord] * VIMSHOTTARI_YEAR_DAYS
+    consumed_before_birth = (degree_in_nakshatra / NAKSHATRA_SPAN) * first_span_days
+    balance_days = first_span_days - consumed_before_birth
+    days_elapsed = (target_utc - birth_utc).total_seconds() / 86400.0
+    if days_elapsed < -1e-6:
+        raise ValueError("Target date cannot precede birth date.")
+    days_elapsed = max(0.0, days_elapsed)
+
+    if days_elapsed <= balance_days + 1e-6:
+        md_lord = first_lord
+        days_into_md = consumed_before_birth + days_elapsed
+        md_span_days = first_span_days
+    else:
+        cursor = balance_days
+        index = (DASHA_ORDER.index(first_lord) + 1) % 9
+        md_lord = first_lord
+        days_into_md = 0.0
+        md_span_days = first_span_days
+        resolved = False
+        for _step in range(36):
+            md_lord = DASHA_ORDER[index]
+            md_span_days = DASHA_YEARS[md_lord] * VIMSHOTTARI_YEAR_DAYS
+            if days_elapsed <= cursor + md_span_days + 1e-6:
+                days_into_md = days_elapsed - cursor
+                resolved = True
+                break
+            cursor += md_span_days
+            index = (index + 1) % 9
+        if not resolved:
+            raise ValueError(
+                "Target date is too far from birth to resolve a Vimshottari mahadasha."
+            )
+
+    ad_lord, days_into_ad = _walk_dasha_cycle(md_lord, days_into_md, md_span_days)
+    ad_span_days = _dasha_span_days(md_span_days, ad_lord)
+    pd_lord, _days_into_pd = _walk_dasha_cycle(ad_lord, days_into_ad, ad_span_days)
+    return {
+        "mahadasha": md_lord,
+        "antardasha": ad_lord,
+        "pratyantardasha": pd_lord,
+        "active_period_string": f"{md_lord}-{ad_lord}-{pd_lord}",
+    }
+
+
+def _load_natal_chart(natal_chart: object) -> dict[str, object]:
+    """Accept the dict or JSON string returned by :func:`get_kundli_json`."""
+    if isinstance(natal_chart, str):
+        try:
+            loaded = json.loads(natal_chart)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid natal chart JSON: {exc}") from exc
+    elif isinstance(natal_chart, dict):
+        loaded = natal_chart
+    else:
+        raise ValueError(
+            "Invalid natal chart. Expected the dict or JSON string from get_kundli_json()."
+        )
+    if not isinstance(loaded, dict):
+        raise ValueError(
+            "Invalid natal chart. Expected the dict or JSON string from get_kundli_json()."
+        )
+    return loaded
+
+
+def _chart_number(payload: dict[str, object], path: str) -> float:
+    current: object = payload
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            raise ValueError(f"Natal chart is missing '{path}'.")
+        current = current[part]
+    try:
+        value = float(current)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Natal chart field '{path}' is not a number.") from exc
+    if not math.isfinite(value):
+        raise ValueError(f"Natal chart field '{path}' is not finite.")
+    return value
+
+
+def _chart_text(payload: dict[str, object], path: str) -> str:
+    current: object = payload
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            raise ValueError(f"Natal chart is missing '{path}'.")
+        current = current[part]
+    if not isinstance(current, str) or not current.strip():
+        raise ValueError(f"Natal chart field '{path}' is empty.")
+    return current
+
+
+def _transit_record(
+    name: str,
+    longitude: float,
+    speed: float | None,
+    natal_lagna_rashi: int,
+    natal_moon_rashi: int,
+) -> dict[str, object]:
+    longitude = normalize_longitude(longitude)
+    rashi = longitude_to_rashi(longitude)
+    retrograde = True if name in INHERENTLY_RETROGRADE else bool(speed is not None and speed < 0.0)
+    return {
+        "sign": RASHI_NAMES[rashi],
+        "sign_number": rashi,
+        "degree_in_sign": round(longitude % 30.0, 2),
+        "house_from_lagna": whole_sign_house(rashi, natal_lagna_rashi),
+        "house_from_moon": whole_sign_house(rashi, natal_moon_rashi),
+        "is_retrograde": retrograde,
+    }
+
+
+def get_timing_telemetry(
+    natal_chart: object,
+    target_date_str: str,
+    target_time_str: str = "12:00",
+) -> dict[str, object]:
+    """Vimshottari timing, sidereal gochara, and the daily lunar trigger.
+
+    ``natal_chart`` is the dict or JSON string from :func:`get_kundli_json`.
+    ``target_date_str`` is ``YYYY-MM-DD`` and ``target_time_str`` is 24-hour
+    ``HH:MM`` in the natal chart's IANA timezone. Ambiguous and nonexistent
+    civil times are rejected. Transits use Lahiri sidereal positions and the
+    mean lunar node.
+
+    The returned ``daily_lunar_trigger`` classifies the transit Moon against
+    the natal Moon's nakshatra. Chandrashtama is the transit Moon in the 8th
+    house from the natal Moon.
+    """
+    chart = _load_natal_chart(natal_chart)
+    birth_text = _chart_text(chart, "metadata.utc_datetime")
+    timezone_name = _chart_text(chart, "metadata.timezone")
+    try:
+        birth_utc = datetime.fromisoformat(birth_text)
+    except ValueError as exc:
+        raise ValueError(
+            f"Natal chart field 'metadata.utc_datetime' is not a valid timestamp: {exc}"
+        ) from exc
+    if birth_utc.tzinfo is None:
+        raise ValueError(
+            "Natal chart field 'metadata.utc_datetime' must include a UTC offset."
+        )
+    birth_utc = birth_utc.astimezone(timezone.utc)
+
+    natal_lagna_rashi = int(_chart_number(chart, "lagna.sign_number"))
+    natal_moon_degree = _chart_number(chart, "planets.Moon.total_degree")
+    natal_moon_rashi = int(_chart_number(chart, "planets.Moon.sign_number"))
+    if natal_lagna_rashi < 1 or natal_lagna_rashi > 12:
+        raise ValueError("Natal lagna sign_number must be from 1 to 12.")
+    if natal_moon_rashi < 1 or natal_moon_rashi > 12:
+        raise ValueError("Natal Moon sign_number must be from 1 to 12.")
+
+    target_local = _localize_birth(
+        target_date_str, target_time_str, timezone_name, moment="target"
+    )
+    target_utc = target_local.astimezone(timezone.utc)
+    utc_decimal_hours = (
+        target_utc.hour
+        + target_utc.minute / 60.0
+        + target_utc.second / 3600.0
+        + target_utc.microsecond / 3_600_000_000.0
+    )
+    try:
+        julian_day = float(
+            swe.julday(target_utc.year, target_utc.month, target_utc.day, utc_decimal_hours)
+        )
+    except (TypeError, ValueError, swe.Error) as exc:
+        raise ValueError(
+            f"Unable to calculate Julian Day for target time {target_utc.isoformat()}: {exc}"
+        ) from exc
+    if not math.isfinite(julian_day):
+        raise ValueError(
+            f"Unable to calculate Julian Day for target time {target_utc.isoformat()}."
+        )
+
+    dasha = _calculate_vimshottari_triple(natal_moon_degree, birth_utc, target_utc)
+    _configure_lahiri()
+    transits: dict[str, object] = {}
+    rahu_longitude: float | None = None
+    moon_longitude: float | None = None
+    for name, _abbreviation, body_id in GRAHA_BODIES:
+        longitude, speed = _calculate_body(julian_day, name, body_id)
+        if name == "Rahu":
+            rahu_longitude = longitude
+        if name == "Moon":
+            moon_longitude = longitude
+        transits[name] = _transit_record(
+            name, longitude, speed, natal_lagna_rashi, natal_moon_rashi
+        )
+    if rahu_longitude is None:
+        raise ValueError("Swiss Ephemeris calculation failed for Rahu: longitude is missing.")
+    if moon_longitude is None:
+        raise ValueError("Swiss Ephemeris calculation failed for Moon: longitude is missing.")
+    ketu_longitude = normalize_longitude(rahu_longitude + 180.0)
+    transits[KETU_NAME] = _transit_record(
+        KETU_NAME, ketu_longitude, None, natal_lagna_rashi, natal_moon_rashi
+    )
+
+    natal_nakshatra = int(
+        math.floor((normalize_longitude(natal_moon_degree) / NAKSHATRA_SPAN) + 1e-10)
+    ) % 27
+    transit_nakshatra = int(math.floor((moon_longitude / NAKSHATRA_SPAN) + 1e-10)) % 27
+    tara_distance = ((transit_nakshatra - natal_nakshatra) % 27) + 1
+    tara_index = (tara_distance - 1) % 9
+    moon_from_natal_moon = int(transits["Moon"]["house_from_moon"])  # type: ignore[index]
+    return {
+        "target_timestamp": {
+            "local": target_local.isoformat(),
+            "utc": target_utc.isoformat(),
+            "timezone": timezone_name,
+        },
+        "active_dasha": dasha,
+        "transits": transits,
+        "daily_lunar_trigger": {
+            "transit_moon_nakshatra_index": transit_nakshatra + 1,
+            "tara_bala": TARA_NAMES[tara_index],
+            "is_tara_favorable": tara_index in FAVORABLE_TARA_INDEXES,
+            "house_from_natal_moon": moon_from_natal_moon,
+            "is_chandrashtama": moon_from_natal_moon == 8,
+        },
+    }
 
 
 def generate_kundli_chart(
