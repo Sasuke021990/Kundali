@@ -1,0 +1,88 @@
+services:
+  api:
+    build: .
+    image: jyotish-telemetry
+    command: uvicorn jyotish_api.main:app --host 0.0.0.0 --port 8741
+    ports:
+      - "8741:8741"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8741/health')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  mcp-kundli:
+    image: jyotish-telemetry
+    command: python -m mcp_servers.kundli_server
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8742"
+    ports:
+      - "8742:8742"
+    depends_on:
+      - api
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8742/health')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  mcp-timing:
+    image: jyotish-telemetry
+    command: python -m mcp_servers.timing_server
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8743"
+    ports:
+      - "8743:8743"
+    depends_on:
+      - api
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8743/health')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  mcp-forecast:
+    image: jyotish-telemetry
+    command: python -m mcp_servers.forecast_server
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8744"
+    ports:
+      - "8744:8744"
+    depends_on:
+      - api
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8744/health')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s

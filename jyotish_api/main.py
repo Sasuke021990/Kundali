@@ -1,0 +1,277 @@
+"""Three HTTP APIs, each with its own Swagger UI.
+
+Kundli:    /kundli/docs
+Timing:    /timing/docs
+Forecast:  /forecast/docs
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
+
+from jyotish_api.service import build_forecast, build_kundli, build_timing
+
+API_PORT = 8741
+KUNDLI_MCP_PORT = 8742
+TIMING_MCP_PORT = 8743
+FORECAST_MCP_PORT = 8744
+
+
+class BirthBody(BaseModel):
+    dob: str = Field(examples=["1998-04-10"], description="Birth date, YYYY-MM-DD.")
+    tob: str = Field(examples=["17:25"], description="Local birth time, 24-hour HH:MM.")
+    location: str = Field(
+        examples=["Hubli, Karnataka"],
+        description="Place name geocoded with OpenStreetMap Nominatim.",
+    )
+
+
+class TimingBody(BaseModel):
+    target_date: str = Field(examples=["2026-10-15"], description="Civil date, YYYY-MM-DD.")
+    target_time: str = Field(
+        "12:00",
+        examples=["09:00"],
+        description="Local time HH:MM in the natal chart timezone. Noon if omitted.",
+    )
+    natal_chart: dict[str, Any] | None = Field(
+        None,
+        description="Dict returned by the Kundli API. Omit it to send dob, tob, and location.",
+    )
+    dob: str | None = Field(None, examples=["1998-04-10"])
+    tob: str | None = Field(None, examples=["17:25"])
+    location: str | None = Field(None, examples=["Hubli, Karnataka"])
+
+
+class ForecastBody(BaseModel):
+    start_date: str = Field(examples=["2026-10-01"], description="First civil date, YYYY-MM-DD.")
+    days: int = Field(30, ge=1, le=3660, description="Number of civil dates, from 1 to 3660.")
+    time: str = Field(
+        "09:00",
+        examples=["09:00"],
+        description="Local clock time applied to every date.",
+    )
+    natal_chart: dict[str, Any] | None = Field(
+        None,
+        description="Dict returned by the Kundli API. Omit it to send dob, tob, and location.",
+    )
+    dob: str | None = Field(None, examples=["1998-04-10"])
+    tob: str | None = Field(None, examples=["17:25"])
+    location: str | None = Field(None, examples=["Hubli, Karnataka"])
+
+
+def _failure(exc: ValueError) -> HTTPException:
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+def _documented_app(title: str, description: str, prefix: str) -> FastAPI:
+    api = FastAPI(
+        title=title,
+        description=description,
+        version="1.0.0",
+        docs_url=None,
+        redoc_url=None,
+    )
+
+    @api.get("/docs", include_in_schema=False)
+    def swagger() -> HTMLResponse:
+        return get_swagger_ui_html(openapi_url=f"{prefix}/openapi.json", title=title)
+
+    @api.get("/redoc", include_in_schema=False)
+    def redoc() -> HTMLResponse:
+        return get_redoc_html(openapi_url=f"{prefix}/openapi.json", title=title)
+
+    @api.get("/health", include_in_schema=False)
+    def health() -> dict[str, str]:
+        return {"status": "ok", "api": title}
+
+    return api
+
+
+KUNDLI_DESCRIPTION = """
+Sidereal Lahiri natal chart from a birth date, time, and place.
+
+Send `POST /chart` with `dob`, `tob`, and `location`. The body that comes back
+is the `natal_chart` the Timing and Forecast APIs accept.
+
+The chart uses whole-sign houses, the mean lunar node, Parashari `aspected_houses`,
+combustion orbs, and graha yuddha within 1°. Geocoding needs network access to
+Nominatim. Ambiguous and nonexistent civil times are rejected.
+""".strip()
+
+TIMING_DESCRIPTION = """
+Vimshottari mahadasha, antardasha, and pratyantardasha, plus Lahiri gochara
+from the natal lagna and the natal Moon, and the daily Tara Bala and Chandrashtama flags.
+
+Send the Kundli API object as `natal_chart`, or send `dob`, `tob`, and `location`
+and this API will calculate the chart first. `target_date` is YYYY-MM-DD in the
+natal timezone. Dasha years are 365.2425 days, and the birth mahadasha includes
+the portion already elapsed at birth.
+
+When `is_chandrashtama` is true, treat the day as a poor window for contracts
+and high-risk decisions. When Mercury is combust, treat intellectual and
+partnership decisions with caution.
+""".strip()
+
+FORECAST_DESCRIPTION = """
+A short timeline across consecutive civil dates. Each row has the dasha string,
+whether it changed from the previous day, the transit Moon, Tara Bala, and risk flags.
+It does not repeat the full nine-graha state.
+
+`critical_windows` lists Chandrashtama, Vipat/Naidhana, Sadhana, and transit combustion.
+`major_transits` lists Jupiter, Saturn, Rahu, and Ketu once, plus any sign change
+inside the window. `dasha_transition: true` is an inflection day.
+
+For a month outlook, keep `critical_windows` and `major_transits`. For one day,
+take that single `timeline` row and call the Timing API for the degrees.
+""".strip()
+
+kundli_api = _documented_app("Kundli API", KUNDLI_DESCRIPTION, "/kundli")
+timing_api = _documented_app("Timing API", TIMING_DESCRIPTION, "/timing")
+forecast_api = _documented_app("Forecast API", FORECAST_DESCRIPTION, "/forecast")
+
+
+@kundli_api.post(
+    "/chart",
+    summary="Calculate a natal Kundli",
+    response_description="Natal chart with metadata, lagna, nine grahas, and twelve houses.",
+)
+def kundli_chart(body: BirthBody) -> dict[str, Any]:
+    try:
+        return build_kundli(body.dob, body.tob, body.location)
+    except ValueError as exc:
+        raise _failure(exc) from exc
+
+
+@timing_api.post(
+    "/telemetry",
+    summary="Dasha, transits, and the lunar trigger",
+    response_description="Target timestamp, active dasha, nine transits, and daily lunar trigger.",
+)
+def timing_telemetry(body: TimingBody) -> dict[str, Any]:
+    try:
+        return build_timing(
+            body.target_date,
+            body.target_time,
+            body.natal_chart,
+            body.dob,
+            body.tob,
+            body.location,
+        )
+    except ValueError as exc:
+        raise _failure(exc) from exc
+
+
+@forecast_api.post(
+    "/window",
+    summary="Multi-day forecast timeline",
+    response_description="Critical windows, major transits, and one concise row per day.",
+)
+def forecast_window(body: ForecastBody) -> dict[str, Any]:
+    try:
+        return build_forecast(
+            body.start_date,
+            body.days,
+            body.time,
+            body.natal_chart,
+            body.dob,
+            body.tob,
+            body.location,
+        )
+    except ValueError as exc:
+        raise _failure(exc) from exc
+
+
+def connection_card(host: str = "127.0.0.1") -> dict[str, Any]:
+    """URLs a browser or an MCP client uses on this machine."""
+    return {
+        "swagger": {
+            "kundli": f"http://{host}:{API_PORT}/kundli/docs",
+            "timing": f"http://{host}:{API_PORT}/timing/docs",
+            "forecast": f"http://{host}:{API_PORT}/forecast/docs",
+        },
+        "openapi": {
+            "kundli": f"http://{host}:{API_PORT}/kundli/openapi.json",
+            "timing": f"http://{host}:{API_PORT}/timing/openapi.json",
+            "forecast": f"http://{host}:{API_PORT}/forecast/openapi.json",
+        },
+        "mcp": {
+            "kundli": f"http://{host}:{KUNDLI_MCP_PORT}/mcp",
+            "timing": f"http://{host}:{TIMING_MCP_PORT}/mcp",
+            "forecast": f"http://{host}:{FORECAST_MCP_PORT}/mcp",
+        },
+    }
+
+
+app = FastAPI(
+    title="Jyotish telemetry",
+    description="Index for the Kundli, Timing, and Forecast APIs.",
+    version="1.0.0",
+    docs_url=None,
+    redoc_url=None,
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+for mounted in (kundli_api, timing_api, forecast_api):
+    mounted.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+app.mount("/kundli", kundli_api)
+app.mount("/timing", timing_api)
+app.mount("/forecast", forecast_api)
+
+
+@app.get("/health", include_in_schema=False)
+def root_health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/connections", include_in_schema=False)
+def connections() -> dict[str, Any]:
+    return connection_card()
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+def home() -> str:
+    card = connection_card()
+    labels = {"kundli": "Kundli", "timing": "Timing", "forecast": "Forecast"}
+    rows = []
+    for name, url in card["swagger"].items():
+        rows.append(f"<li><a href=\"{url}\">{labels[name]} Swagger</a></li>")
+    mcp_rows = "".join(f"<li><code>{name}</code> {url}</li>" for name, url in card["mcp"].items())
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Jyotish telemetry</title>
+  <style>
+    body {{ font-family: Georgia, serif; max-width: 42rem; margin: 2.5rem auto; padding: 0 1rem;
+           color: #1c1917; background: #fffdf7; }}
+    code {{ font-family: ui-monospace, monospace; }}
+    a {{ color: #7f1d1d; }}
+  </style>
+</head>
+<body>
+  <h1>Jyotish telemetry</h1>
+  <p>Three HTTP APIs over the natal chart, the timing calculation, and the forecast window.</p>
+  <ul>
+    {''.join(rows)}
+  </ul>
+  <h2>MCP endpoints</h2>
+  <ul>{mcp_rows}</ul>
+  <p>Machine-readable URLs are at <a href="/connections"><code>/connections</code></a>.</p>
+</body>
+</html>"""

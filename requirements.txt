@@ -2,3 +2,6 @@ pyswisseph>=2.10.3
 geopy>=2.4
 timezonefinder>=6.2
 matplotlib>=3.7
+fastapi>=0.115
+uvicorn>=0.32
+mcp>=2.0

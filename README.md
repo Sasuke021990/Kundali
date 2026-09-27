@@ -98,3 +98,115 @@ path = generate_kundli_chart(
 ```
 
 Geocoding needs network access to OpenStreetMap Nominatim. The program does not substitute coordinates or UTC when lookup fails.
+
+## HTTP APIs and MCP servers
+
+Three HTTP APIs and three MCP servers call the same functions. One Docker image runs all of them.
+
+| Service | What it calls | Swagger | MCP endpoint |
+| --- | --- | --- | --- |
+| Kundli | `get_kundli_json` | http://127.0.0.1:8741/kundli/docs | http://127.0.0.1:8742/mcp |
+| Timing | `get_timing_telemetry` | http://127.0.0.1:8741/timing/docs | http://127.0.0.1:8743/mcp |
+| Forecast | `generate_forecast_window` | http://127.0.0.1:8741/forecast/docs | http://127.0.0.1:8744/mcp |
+
+OpenAPI documents, without the Swagger UI, are at `/kundli/openapi.json`, `/timing/openapi.json`, and `/forecast/openapi.json` on port 8741. ReDoc for each API is the same path with `/redoc` instead of `/docs`. A short index of these URLs is at http://127.0.0.1:8741/ and the same data as JSON is at http://127.0.0.1:8741/connections.
+
+### Run with Docker
+
+```bash
+docker compose up --build
+```
+
+The API container listens on 8741. The Kundli, Timing, and Forecast MCP containers listen on 8742, 8743, and 8744. Each container has a `GET /health` check. The chart calls need outbound access to OpenStreetMap Nominatim.
+
+One container can run every process instead of Compose:
+
+```bash
+docker build -t jyotish-telemetry .
+docker run --rm -p 8741:8741 -p 8742:8742 -p 8743:8743 -p 8744:8744 jyotish-telemetry
+```
+
+### Run without Docker
+
+```bash
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn jyotish_api.main:app --host 0.0.0.0 --port 8741
+MCP_PORT=8742 python -m mcp_servers.kundli_server
+MCP_PORT=8743 python -m mcp_servers.timing_server
+MCP_PORT=8744 python -m mcp_servers.forecast_server
+```
+
+Start each process in its own terminal. `MCP_HOST` defaults to `0.0.0.0`.
+
+### Swagger calls
+
+Kundli, `POST /kundli/chart`:
+
+```json
+{
+  "dob": "1998-04-10",
+  "tob": "17:25",
+  "location": "Hubli, Karnataka"
+}
+```
+
+Timing, `POST /timing/telemetry`. Pass the Kundli response as `natal_chart`, or send birth details and the API calculates the chart:
+
+```json
+{
+  "dob": "1998-04-10",
+  "tob": "17:25",
+  "location": "Hubli, Karnataka",
+  "target_date": "2026-10-15",
+  "target_time": "09:00"
+}
+```
+
+Forecast, `POST /forecast/window`:
+
+```json
+{
+  "dob": "1998-04-10",
+  "tob": "17:25",
+  "location": "Hubli, Karnataka",
+  "start_date": "2026-10-01",
+  "days": 30,
+  "time": "09:00"
+}
+```
+
+A bad date, an unknown place, or a daylight-saving gap returns HTTP 400 with the validation message in `detail`.
+
+For a month outlook, send a model the natal chart, `critical_windows`, and `major_transits`. For one day, send that `timeline` row plus the Timing API degrees. Treat `dasha_transition: true` as the day the period changes.
+
+### MCP client configuration
+
+The servers speak streamable HTTP at `/mcp` and answer JSON. In Cursor, add this to the MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "jyotish-kundli": {
+      "type": "http",
+      "url": "http://127.0.0.1:8742/mcp"
+    },
+    "jyotish-timing": {
+      "type": "http",
+      "url": "http://127.0.0.1:8743/mcp"
+    },
+    "jyotish-forecast": {
+      "type": "http",
+      "url": "http://127.0.0.1:8744/mcp"
+    }
+  }
+}
+```
+
+| MCP server | Tool | Required arguments |
+| --- | --- | --- |
+| jyotish-kundli | `get_kundli_json` | `dob`, `tob`, `location` |
+| jyotish-timing | `get_timing_telemetry` | `target_date`. Also `natal_chart`, or `dob` + `tob` + `location`. `target_time` defaults to `12:00`. |
+| jyotish-forecast | `generate_forecast_window` | `start_date`. Also `natal_chart`, or `dob` + `tob` + `location`. `days` defaults to 30 and `time` defaults to `09:00`. |
+
+Health checks for the MCP processes are `GET http://127.0.0.1:8742/health`, `GET http://127.0.0.1:8743/health`, and `GET http://127.0.0.1:8744/health`. Those routes are not MCP tools.
