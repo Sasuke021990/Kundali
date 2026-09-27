@@ -90,6 +90,7 @@ GRAHA_BODIES: tuple[tuple[str, str, int], ...] = (
     ("Jupiter", "Ju", swe.JUPITER),
     ("Venus", "Ve", swe.VENUS),
     ("Saturn", "Sa", swe.SATURN),
+    # Mean node, not true node. True node can differ by about ±1.5°.
     ("Rahu", "Ra", swe.MEAN_NODE),
 )
 KETU_NAME = "Ketu"
@@ -168,6 +169,13 @@ DEBILITATION_SIGN: dict[str, int] = {
     "Rahu": 8,
     "Ketu": 2,
 }
+# Direct orb, then the smaller retrograde orb. Separation is the short arc.
+COMBUSTION_ORBS: dict[str, tuple[float, float]] = {
+    "Mercury": (14.0, 12.0),
+    "Venus": (10.0, 8.0),
+}
+GRAHA_YUDDHA_ORB = 1.0
+GRAHA_YUDDHA_PLANETS = frozenset({"Mars", "Mercury", "Jupiter", "Venus", "Saturn"})
 
 # North Indian house polygons in chart coordinates (x right, y up).
 HOUSE_POLYGONS: dict[int, tuple[tuple[float, float], ...]] = {
@@ -1871,6 +1879,36 @@ def planet_dignity(name: str, rashi_index: int) -> str:
     return "Neutral"
 
 
+def is_combust(name: str, longitude: float, sun_longitude: float, retrograde: bool) -> bool:
+    """True when Mercury or Venus is within its combustion orb of the Sun.
+
+    The orb is the short arc in longitude, so a planet in the next sign still
+    combusts. Mercury uses 14° direct and 12° retrograde. Venus uses 10° direct
+    and 8° retrograde. Other grahas are not marked combust.
+    """
+    orbs = COMBUSTION_ORBS.get(name)
+    if orbs is None:
+        return False
+    orb = orbs[1] if retrograde else orbs[0]
+    return _angular_separation(longitude, sun_longitude) <= orb
+
+
+def graha_yuddha_participants(planets: tuple[PlanetPosition, ...]) -> set[str]:
+    """Names of tara grahas within 1° of another tara graha.
+
+    Sun, Moon, Rahu, and Ketu do not enter a planetary war. Sharing a sign is
+    not enough; the longitudes must be within one degree.
+    """
+    fighters = [planet for planet in planets if planet.name in GRAHA_YUDDHA_PLANETS]
+    engaged: set[str] = set()
+    for index, left in enumerate(fighters):
+        for right in fighters[index + 1 :]:
+            if _angular_separation(left.longitude, right.longitude) <= GRAHA_YUDDHA_ORB:
+                engaged.add(left.name)
+                engaged.add(right.name)
+    return engaged
+
+
 def houses_ruled_by(name: str, lagna_rashi_index: int) -> list[int]:
     """Whole-sign houses whose rashi lord is ``name``. Rahu and Ketu rule none."""
     signs = [sign for sign, lord in SIGN_LORDS.items() if lord == name]
@@ -1891,6 +1929,8 @@ def kundli_as_dict(chart: ChartData) -> dict[str, object]:
     lagna_nakshatra, lagna_pada, _lagna_nakshatra_lord = nakshatra_placement(lagna_total)
     planets: dict[str, object] = {}
     occupants: dict[int, list[str]] = {house: [] for house in range(1, 13)}
+    sun = next(planet for planet in chart.planets if planet.name == "Sun")
+    at_war = graha_yuddha_participants(chart.planets)
     for planet in chart.planets:
         total = _rounded_longitude(planet.longitude)
         nakshatra, pada, _lord = nakshatra_placement(total)
@@ -1904,6 +1944,10 @@ def kundli_as_dict(chart: ChartData) -> dict[str, object]:
             "nakshatra": nakshatra,
             "pada": pada,
             "is_retrograde": planet.retrograde,
+            "is_combust": is_combust(
+                planet.name, planet.longitude, sun.longitude, planet.retrograde
+            ),
+            "is_in_graha_yuddha": planet.name in at_war,
             "dignity": planet_dignity(planet.name, planet.rashi_index),
             "lord_of_houses": houses_ruled_by(planet.name, chart.lagna_rashi_index),
         }
@@ -1959,6 +2003,10 @@ def get_kundli_json(dob: str, tob: str, location: str) -> str:
     ``ruling_planet`` is the rashi lord of the lagna. ``dignity`` is Exalted,
     Debilitated, Own, or Neutral. ``lord_of_houses`` lists the whole-sign
     houses that graha rules from this lagna. Rahu and Ketu rule no signs.
+    Rahu is the mean node. ``is_combust`` is true for Mercury within 14° of
+    the Sun, or 12° when retrograde, and for Venus within 10°, or 8° when
+    retrograde. ``is_in_graha_yuddha`` is true when Mars, Mercury, Jupiter,
+    Venus, or Saturn is within 1° of another of those five.
     """
     chart = compute_chart(dob, tob, location)
     return json.dumps(kundli_as_dict(chart), indent=2, ensure_ascii=False)
