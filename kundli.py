@@ -195,13 +195,26 @@ DEBILITATION_SIGN: dict[str, int] = {
     "Rahu": 8,
     "Ketu": 2,
 }
-# Direct orb, then the smaller retrograde orb. Separation is the short arc.
+# Direct orb, then the retrograde orb. Only Mercury and Venus tighten when retrograde.
+# Separation is the short arc. Sun, Rahu, and Ketu are never combust.
 COMBUSTION_ORBS: dict[str, tuple[float, float]] = {
+    "Moon": (12.0, 12.0),
+    "Mars": (17.0, 17.0),
     "Mercury": (14.0, 12.0),
+    "Jupiter": (11.0, 11.0),
     "Venus": (10.0, 8.0),
+    "Saturn": (15.0, 15.0),
 }
 GRAHA_YUDDHA_ORB = 1.0
 GRAHA_YUDDHA_PLANETS = frozenset({"Mars", "Mercury", "Jupiter", "Venus", "Saturn"})
+# Special Parashari aspects, in addition to the 7th that every graha casts.
+SPECIAL_ASPECTS: dict[str, tuple[int, ...]] = {
+    "Mars": (4, 8),
+    "Jupiter": (5, 9),
+    "Rahu": (5, 9),
+    "Ketu": (5, 9),
+    "Saturn": (3, 10),
+}
 
 # North Indian house polygons in chart coordinates (x right, y up).
 HOUSE_POLYGONS: dict[int, tuple[tuple[float, float], ...]] = {
@@ -1905,12 +1918,25 @@ def planet_dignity(name: str, rashi_index: int) -> str:
     return "Neutral"
 
 
-def is_combust(name: str, longitude: float, sun_longitude: float, retrograde: bool) -> bool:
-    """True when Mercury or Venus is within its combustion orb of the Sun.
+def aspected_houses(name: str, house: int) -> list[int]:
+    """Whole-sign houses receiving a Parashari aspect from ``name`` in ``house``.
 
-    The orb is the short arc in longitude, so a planet in the next sign still
-    combusts. Mercury uses 14° direct and 12° retrograde. Venus uses 10° direct
-    and 8° retrograde. Other grahas are not marked combust.
+    Every graha aspects the 7th. Mars also aspects the 4th and 8th. Jupiter,
+    Rahu, and Ketu also aspect the 5th and 9th. Saturn also aspects the 3rd
+    and 10th.
+    """
+    if house < 1 or house > 12:
+        raise ValueError(f"House must be from 1 to 12, got {house}.")
+    aspects = (7,) + SPECIAL_ASPECTS.get(name, ())
+    return sorted({((house + aspect - 2) % 12) + 1 for aspect in aspects})
+
+
+def is_combust(name: str, longitude: float, sun_longitude: float, retrograde: bool) -> bool:
+    """True when a graha is within its combustion orb of the Sun.
+
+    The orb is the short arc in longitude, so a sign boundary does not cancel
+    combustion. Moon 12°, Mars 17°, Mercury 14° (12° retrograde), Jupiter 11°,
+    Venus 10° (8° retrograde), Saturn 15°. Sun, Rahu, and Ketu are never combust.
     """
     orbs = COMBUSTION_ORBS.get(name)
     if orbs is None:
@@ -1976,6 +2002,7 @@ def kundli_as_dict(chart: ChartData) -> dict[str, object]:
             "is_in_graha_yuddha": planet.name in at_war,
             "dignity": planet_dignity(planet.name, planet.rashi_index),
             "lord_of_houses": houses_ruled_by(planet.name, chart.lagna_rashi_index),
+            "aspected_houses": aspected_houses(planet.name, planet.house),
         }
     if list(planets) != list(PLANET_NAMES):
         raise ValueError(
@@ -2019,23 +2046,32 @@ def kundli_as_dict(chart: ChartData) -> dict[str, object]:
     return payload
 
 
-def get_kundli_json(dob: str, tob: str, location: str) -> str:
-    """Return the sidereal Kundli for ``dob``, ``tob``, and ``location`` as JSON.
+def get_kundli_json(
+    dob: str,
+    tob: str,
+    location: str,
+    as_string: bool = False,
+) -> dict[str, object] | str:
+    """Return the sidereal Kundli for ``dob``, ``tob``, and ``location``.
 
-    The string uses the same birth, geocoding, timezone, and Lahiri calculation
-    path as :func:`generate_kundli_chart`. It includes every graha and all
-    twelve whole-sign houses.
+    The default is a Python dict so it can be passed straight to
+    :func:`get_timing_telemetry`. Set ``as_string`` to receive indented JSON.
+    The calculation path matches :func:`generate_kundli_chart`.
 
     ``ruling_planet`` is the rashi lord of the lagna. ``dignity`` is Exalted,
     Debilitated, Own, or Neutral. ``lord_of_houses`` lists the whole-sign
     houses that graha rules from this lagna. Rahu and Ketu rule no signs.
-    Rahu is the mean node. ``is_combust`` is true for Mercury within 14° of
-    the Sun, or 12° when retrograde, and for Venus within 10°, or 8° when
-    retrograde. ``is_in_graha_yuddha`` is true when Mars, Mercury, Jupiter,
-    Venus, or Saturn is within 1° of another of those five.
+    ``aspected_houses`` lists the Parashari aspects from that graha's house.
+    Rahu is the mean node. ``is_combust`` uses the short-arc orbs Moon 12°,
+    Mars 17°, Mercury 14° (12° retrograde), Jupiter 11°, Venus 10° (8°
+    retrograde), and Saturn 15°. ``is_in_graha_yuddha`` is true when Mars,
+    Mercury, Jupiter, Venus, or Saturn is within 1° of another of those five.
     """
     chart = compute_chart(dob, tob, location)
-    return json.dumps(kundli_as_dict(chart), indent=2, ensure_ascii=False)
+    payload = kundli_as_dict(chart)
+    if as_string:
+        return json.dumps(payload, indent=2, ensure_ascii=False)
+    return payload
 
 
 def _dasha_span_days(parent_days: float, lord: str) -> float:
@@ -2087,20 +2123,22 @@ def _calculate_vimshottari_triple(
 
     if days_elapsed <= balance_days + 1e-6:
         md_lord = first_lord
-        days_into_md = consumed_before_birth + days_elapsed
+        # Balance is the remainder at birth, so the years already lived
+        # inside this mahadasha must be added before antardasha is resolved.
+        md_elapsed = (first_span_days - balance_days) + days_elapsed
         md_span_days = first_span_days
     else:
         cursor = balance_days
         index = (DASHA_ORDER.index(first_lord) + 1) % 9
         md_lord = first_lord
-        days_into_md = 0.0
+        md_elapsed = 0.0
         md_span_days = first_span_days
         resolved = False
         for _step in range(36):
             md_lord = DASHA_ORDER[index]
             md_span_days = DASHA_YEARS[md_lord] * VIMSHOTTARI_YEAR_DAYS
             if days_elapsed <= cursor + md_span_days + 1e-6:
-                days_into_md = days_elapsed - cursor
+                md_elapsed = days_elapsed - cursor
                 resolved = True
                 break
             cursor += md_span_days
@@ -2110,7 +2148,7 @@ def _calculate_vimshottari_triple(
                 "Target date is too far from birth to resolve a Vimshottari mahadasha."
             )
 
-    ad_lord, days_into_ad = _walk_dasha_cycle(md_lord, days_into_md, md_span_days)
+    ad_lord, days_into_ad = _walk_dasha_cycle(md_lord, md_elapsed, md_span_days)
     ad_span_days = _dasha_span_days(md_span_days, ad_lord)
     pd_lord, _days_into_pd = _walk_dasha_cycle(ad_lord, days_into_ad, ad_span_days)
     return {
