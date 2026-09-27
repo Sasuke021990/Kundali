@@ -42,7 +42,7 @@ python kundli.py \
 
 ## JSON
 
-`get_kundli_json` uses the same calculation as the PNG and returns a JSON string: birth metadata, lagna, nine grahas, and twelve whole-sign houses.
+`get_kundli_json` uses the same calculation as the PNG and returns a JSON string: birth metadata, lagna, nine grahas, and twelve whole-sign houses. Rahu is the mean node. Each graha includes `is_combust` and `is_in_graha_yuddha`.
 
 ```python
 from kundli import get_kundli_json
