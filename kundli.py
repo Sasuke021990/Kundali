@@ -21,7 +21,7 @@ import os
 import sys
 import textwrap
 from dataclasses import dataclass
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -2333,6 +2333,185 @@ def get_timing_telemetry(
             "house_from_natal_moon": moon_from_natal_moon,
             "is_chandrashtama": moon_from_natal_moon == 8,
         },
+    }
+
+
+def _transit_longitude(record: object) -> float:
+    """Sidereal longitude from a gochara record, to the stored hundredth of a degree."""
+    if not isinstance(record, dict):
+        raise ValueError("Transit record is missing.")
+    try:
+        sign_number = int(record["sign_number"])
+        degree = float(record["degree_in_sign"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Transit record is missing sign_number or degree_in_sign.") from exc
+    return normalize_longitude((sign_number - 1) * 30.0 + degree)
+
+
+def _combust_transit_names(transits: dict[str, object]) -> list[str]:
+    """Grahas within their solar combustion orb on this transit snapshot."""
+    sun = _transit_longitude(transits["Sun"])
+    combust: list[str] = []
+    for name in COMBUSTION_ORBS:
+        record = transits[name]
+        if not isinstance(record, dict):
+            raise ValueError(f"Transit record for {name} is missing.")
+        retrograde = bool(record.get("is_retrograde"))
+        if is_combust(name, _transit_longitude(record), sun, retrograde):
+            combust.append(name)
+    return combust
+
+
+def generate_forecast_window(
+    natal_chart: object,
+    start_date_str: str,
+    days: int = 30,
+    time_str: str = "09:00",
+) -> dict[str, object]:
+    """Daily lunar timeline for ``days`` civil dates, starting at ``start_date_str``.
+
+    Each row keeps the dasha string, Moon sign and houses, Tara Bala, and risk
+    flags. It does not repeat the full nine-graha state. Chandrashtama, Vipat,
+    and Naidhana are collected into ``critical_windows``. A day is a peak
+    execution day when Tara is Sadhana and the Moon is not in Chandrashtama.
+    ``dasha_transition`` is true only when the mahadasha-antardasha-pratyantardasha
+    string differs from the previous civil day. Jupiter, Saturn, Rahu, and Ketu
+    signs are summarized once for a month-scale reading.
+    """
+    if isinstance(days, bool) or not isinstance(days, int) or days < 1 or days > 3660:
+        raise ValueError("Forecast days must be an integer from 1 to 3660.")
+    try:
+        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise ValueError(
+            f"Forecast start date must be YYYY-MM-DD, got '{start_date_str}'."
+        ) from exc
+
+    chart = _load_natal_chart(natal_chart)
+    native_dob = _chart_text(chart, "metadata.dob")
+    native_lagna = _chart_text(chart, "lagna.sign")
+
+    prior_date = (start_date - timedelta(days=1)).isoformat()
+    try:
+        prior = get_timing_telemetry(chart, prior_date, time_str)
+    except ValueError as exc:
+        if "precede" not in str(exc):
+            raise
+        previous_dasha = None
+    else:
+        previous_dasha = str(prior["active_dasha"]["active_period_string"])  # type: ignore[index]
+
+    timeline: list[dict[str, object]] = []
+    chandrashtama_days: list[str] = []
+    friction_days: list[str] = []
+    execution_days: list[str] = []
+    combustion_days: list[str] = []
+    major_names = ("Jupiter", "Saturn", "Rahu", "Ketu")
+    major_at_start: dict[str, object] = {}
+    sign_changes: list[dict[str, str]] = []
+    previous_signs: dict[str, str] = {}
+
+    for offset in range(days):
+        current_date = (start_date + timedelta(days=offset)).isoformat()
+        daily = get_timing_telemetry(chart, current_date, time_str)
+        dasha = daily["active_dasha"]
+        lunar = daily["daily_lunar_trigger"]
+        transits = daily["transits"]
+        if (
+            not isinstance(dasha, dict)
+            or not isinstance(lunar, dict)
+            or not isinstance(transits, dict)
+        ):
+            raise ValueError(f"Timing telemetry for {current_date} is incomplete.")
+        moon = transits["Moon"]
+        if not isinstance(moon, dict):
+            raise ValueError(f"Timing telemetry for {current_date} is missing the Moon.")
+
+        dasha_string = str(dasha["active_period_string"])
+        dasha_transition = previous_dasha is not None and dasha_string != previous_dasha
+        previous_dasha = dasha_string
+        tara_bala = str(lunar["tara_bala"])
+        is_chandrashtama = bool(lunar["is_chandrashtama"])
+        risk_flags: list[str] = []
+
+        if is_chandrashtama:
+            risk_flags.append("CHANDRASHTAMA (Emotional volatility / poor decision window)")
+            chandrashtama_days.append(current_date)
+        if "Naidhana" in tara_bala:
+            risk_flags.append("NAIDHANA_TARA (Crisis / sudden obstacles)")
+            friction_days.append(current_date)
+        elif "Vipat" in tara_bala:
+            risk_flags.append("VIPAT_TARA (Unplanned delays / losses)")
+            friction_days.append(current_date)
+        elif "Sadhana" in tara_bala and not is_chandrashtama:
+            execution_days.append(current_date)
+
+        combust = _combust_transit_names(transits)
+        if combust:
+            names = ", ".join(combust)
+            risk_flags.append(f"COMBUSTION ({names} within solar orb)")
+            combustion_days.append(current_date)
+
+        for name in major_names:
+            record = transits[name]
+            if not isinstance(record, dict):
+                raise ValueError(f"Timing telemetry for {current_date} is missing {name}.")
+            sign = str(record["sign"])
+            if offset == 0:
+                major_at_start[name] = {
+                    "sign": sign,
+                    "sign_number": int(record["sign_number"]),
+                    "is_retrograde": bool(record["is_retrograde"]),
+                }
+                previous_signs[name] = sign
+            elif previous_signs[name] != sign:
+                sign_changes.append(
+                    {
+                        "date": current_date,
+                        "planet": name,
+                        "from_sign": previous_signs[name],
+                        "to_sign": sign,
+                    }
+                )
+                previous_signs[name] = sign
+
+        timeline.append(
+            {
+                "date": current_date,
+                "active_dasha": dasha_string,
+                "dasha_transition": dasha_transition,
+                "transit_moon": {
+                    "sign": moon["sign"],
+                    "house_from_moon": moon["house_from_moon"],
+                    "house_from_lagna": moon["house_from_lagna"],
+                    "is_chandrashtama": is_chandrashtama,
+                },
+                "tara_bala": tara_bala,
+                "is_favorable": bool(lunar["is_tara_favorable"]) and not is_chandrashtama,
+                "risk_flags": risk_flags,
+            }
+        )
+
+    return {
+        "metadata": {
+            "native_dob": native_dob,
+            "native_lagna": native_lagna,
+            "forecast_start": start_date_str,
+            "total_days": days,
+            "time": time_str,
+        },
+        "critical_windows": {
+            "chandrashtama_dates": chandrashtama_days,
+            "friction_dates": sorted(set(friction_days)),
+            "peak_execution_dates": execution_days,
+            "combustion_dates": combustion_days,
+        },
+        "major_transits": {
+            "as_of": start_date_str,
+            "planets": major_at_start,
+            "sign_changes": sign_changes,
+        },
+        "timeline": timeline,
     }
 
 

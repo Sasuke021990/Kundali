@@ -69,6 +69,21 @@ timing = get_timing_telemetry(natal, "2026-10-15", "09:00")
 print(json.dumps(timing, indent=2))
 ```
 
+## Forecast window
+
+`generate_forecast_window` walks consecutive civil dates at one local time and returns a short timeline. Each day has the dasha string, whether that string changed from the previous day, the transit Moon, Tara Bala, and risk flags. Chandrashtama, Vipat, Naidhana, and transit combustion are collected under `critical_windows`. Jupiter, Saturn, Rahu, and Ketu are listed once in `major_transits`, with any sign change inside the window.
+
+For a month outlook, pass the natal chart, `critical_windows`, and `major_transits`. For one day, pass that single `timeline` row plus the natal chart and that day's transit degrees from `get_timing_telemetry`. Highlight dates where `dasha_transition` is true.
+
+```python
+import json
+from kundli import generate_forecast_window, get_kundli_json
+
+natal = get_kundli_json("1998-04-10", "17:25", "Hubli, Karnataka")
+forecast = generate_forecast_window(natal, "2026-10-01", days=30)
+print(json.dumps(forecast["critical_windows"], indent=2))
+```
+
 ## Use as a library
 
 ```python
