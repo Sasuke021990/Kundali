@@ -33,6 +33,7 @@ from geopy.exc import GeopyError
 from geopy.geocoders import Nominatim
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+from matplotlib.font_manager import FontProperties, fontManager
 from matplotlib.text import Text
 from timezonefinder import TimezoneFinder
 
@@ -42,7 +43,7 @@ from timezonefinder import TimezoneFinder
 
 BACKGROUND = "#FFFDF7"
 BORDER = "#2A2A2A"
-RASHI_COLOR = "#555555"
+RASHI_COLOR = "#333333"
 PLANET_COLOR = "#8B0000"
 
 OUTPUT_DPI = 400
@@ -174,7 +175,7 @@ class PlanetPosition:
         if self.abbreviation in {"Ra", "Ke"}:
             return self.abbreviation
         if self.retrograde:
-            return f"{self.abbreviation}(R)"
+            return f"{self.abbreviation} (R)"
         return self.abbreviation
 
 
@@ -1141,12 +1142,12 @@ def initial_planet_fontsize(count: int) -> float:
     if count <= 1:
         return 13.5
     if count == 2:
-        return 11.5
+        return 11.0
     if count == 3:
-        return 9.5
-    if count == 4:
         return 8.0
-    return max(MIN_PLANET_FONT, 8.0 - (count - 4) * 0.6)
+    if count == 4:
+        return 7.0
+    return max(MIN_PLANET_FONT, 7.0 - (count - 4) * 0.5)
 
 
 def rashi_fontsize_for(planet_fontsize: float, planet_count: int) -> float:
@@ -1188,6 +1189,50 @@ def _seek_near(
     return None
 
 
+def _layout_inset(label_count: int) -> float:
+    """Pull crowded stacks farther inside the polygon so glyphs clear the border."""
+    if label_count >= 4:
+        return 0.26
+    if label_count >= 3:
+        return 0.22
+    if label_count == 2:
+        return 0.16
+    return LAYOUT_INSET
+
+
+def _place_stack(
+    safe: Polygon,
+    labels: tuple[str, ...],
+    sizes: list[tuple[float, float]],
+    planet_font: float,
+    center_y: float,
+    gap: float,
+    y_low: float,
+    y_high: float,
+) -> list[tuple[str, float, float, float, str]] | None:
+    """Stack planet labels vertically around ``center_y``, one line each."""
+    stack_height = sum(height for _width, height in sizes) + gap * (len(labels) - 1)
+    cursor_top = center_y + stack_height / 2.0
+    if cursor_top > y_high or cursor_top - stack_height < y_low:
+        return None
+    placed: list[tuple[str, float, float, float, str]] = []
+    for label, (width, height) in zip(labels, sizes):
+        preferred = cursor_top - height / 2.0
+        found = _seek_near(
+            safe,
+            preferred,
+            width,
+            height,
+            preferred - height * 0.45,
+            preferred + height * 0.2,
+        )
+        if found is None:
+            return None
+        placed.append((label, found[0], found[1], planet_font, "planet"))
+        cursor_top = found[1] - height / 2.0 - gap
+    return placed
+
+
 def _layout_house(
     axes: Axes,
     vertices: Polygon,
@@ -1195,19 +1240,61 @@ def _layout_house(
     labels: tuple[str, ...],
     planet_font: float,
     rashi_font: float,
+    house_number: int,
 ) -> list[tuple[str, float, float, float, str]] | None:
     """Return text placements ``(text, x, y, fontsize, kind)`` or ``None`` if they do not fit.
 
     The rashi number sits in the upper part of the inset polygon. Planet labels
-    are separate centered lines in the region below it. Every coordinate is the
-    midpoint of the polygon's horizontal cross-section, not a fixed house offset.
+    are separate centered lines in the region below it. House 1 is the exception:
+    its sign number is shifted toward the inner bottom vertex so the planet label
+    keeps a clear gap. Every coordinate is the midpoint of the polygon's
+    horizontal cross-section, not a fixed house offset.
     """
-    safe = inset_polygon(vertices, LAYOUT_INSET)
+    safe = inset_polygon(vertices, _layout_inset(len(labels)))
     _cx, cy = polygon_centroid(safe)
     _minx, miny, _maxx, maxy = bounding_box(safe)
     span = maxy - miny
-    rashi_w, rashi_h = _estimate_text_size(axes, str(rashi_number), rashi_font, "regular")
-    rashi_target = miny + 0.78 * span
+    rashi_w, rashi_h = _estimate_text_size(axes, str(rashi_number), rashi_font, "medium")
+    sizes = [_estimate_text_size(axes, label, planet_font, "bold") for label in labels]
+
+    if house_number == 1 and labels:
+        line_gap = max(rashi_h, sizes[0][1]) * 0.35
+        planet_center = miny + 0.62 * span
+        planets = _place_stack(
+            safe,
+            labels,
+            sizes,
+            planet_font,
+            planet_center,
+            line_gap,
+            miny + 0.42 * span,
+            maxy - sizes[0][1],
+        )
+        if planets is None:
+            return None
+        planet_bottom = min(
+            y - height / 2.0
+            for (_text, _x, y, _size, _kind), (_width, height) in zip(planets, sizes)
+        )
+        # Sign number sits toward the inner bottom vertex, clear of the planet.
+        separation = max(0.055, rashi_h * 1.6)
+        rashi_target = min(miny + 0.30 * span, planet_bottom - separation - rashi_h / 2.0)
+        rashi_pos = _seek_near(
+            safe,
+            rashi_target,
+            rashi_w,
+            rashi_h,
+            miny,
+            planet_bottom - separation,
+        )
+        if rashi_pos is None or rashi_pos[1] > planet_bottom - separation * 0.75:
+            return None
+        return [
+            (str(rashi_number), rashi_pos[0], rashi_pos[1], rashi_font, "rashi"),
+            *planets,
+        ]
+
+    rashi_target = miny + (0.72 if labels else 0.78) * span
     rashi_pos = _seek_near(
         safe,
         rashi_target,
@@ -1218,38 +1305,41 @@ def _layout_house(
     )
     if rashi_pos is None:
         return None
-
     placements: list[tuple[str, float, float, float, str]] = [
         (str(rashi_number), rashi_pos[0], rashi_pos[1], rashi_font, "rashi")
     ]
     if not labels:
         return placements
 
-    sizes = [_estimate_text_size(axes, label, planet_font, "bold") for label in labels]
-    gap = max(rashi_h, sizes[0][1]) * 0.22
+    gap = max(rashi_h, sizes[0][1]) * (0.55 if len(labels) >= 3 else 0.35)
     stack_height = sum(height for _width, height in sizes) + gap * (len(labels) - 1)
     region_top = rashi_pos[1] - (rashi_h / 2.0) - gap
-    region_bottom = miny
-    if region_top - region_bottom < stack_height:
+    if region_top - miny < stack_height:
         return None
     center = min(cy, region_top - stack_height / 2.0)
-    center = max(center, region_bottom + stack_height / 2.0)
-    cursor_top = center + stack_height / 2.0
-    for label, (width, height) in zip(labels, sizes):
-        preferred = cursor_top - height / 2.0
-        found = _seek_near(
-            safe,
-            preferred,
-            width,
-            height,
-            preferred - height,
-            preferred + height * 0.35,
-        )
-        if found is None or found[1] > region_top - height / 2.0 + 1e-6:
-            return None
-        placements.append((label, found[0], found[1], planet_font, "planet"))
-        cursor_top = found[1] - height / 2.0 - gap
+    center = max(center, miny + stack_height / 2.0)
+    planets = _place_stack(
+        safe,
+        labels,
+        sizes,
+        planet_font,
+        center,
+        gap,
+        miny,
+        region_top,
+    )
+    if planets is None:
+        return None
+    placements.extend(planets)
     return placements
+
+
+def _rashi_fontproperties(size: float) -> FontProperties:
+    """Slightly heavier than regular. Prefer a real medium face when installed."""
+    for font in fontManager.ttflist:
+        if font.fname.endswith(("Inter-Medium.ttf", "Inter-Medium.otf")):
+            return FontProperties(fname=font.fname, size=size)
+    return FontProperties(family="DejaVu Sans", size=size, weight="bold")
 
 
 def _add_label(
@@ -1262,21 +1352,29 @@ def _add_label(
     gid: str,
 ) -> Text:
     if kind == "planet":
-        color = PLANET_COLOR
-        weight = "bold"
-    else:
-        color = RASHI_COLOR
-        weight = "regular"
+        artist = axes.text(
+            x,
+            y,
+            text,
+            ha="center",
+            va="center",
+            fontsize=fontsize,
+            fontweight="bold",
+            color=PLANET_COLOR,
+            fontfamily="DejaVu Sans",
+            clip_on=False,
+            zorder=4,
+            gid=gid,
+        )
+        return artist
     artist = axes.text(
         x,
         y,
         text,
         ha="center",
         va="center",
-        fontsize=fontsize,
-        fontweight=weight,
-        color=color,
-        fontfamily="DejaVu Sans",
+        color=RASHI_COLOR,
+        fontproperties=_rashi_fontproperties(fontsize),
         clip_on=False,
         zorder=4,
         gid=gid,
@@ -1322,16 +1420,50 @@ def _bboxes_overlap(first: Text, second: Text, axes: Axes, renderer: object) -> 
     return not separated
 
 
+def _bbox_edge_clearance(axes: Axes, artist: Text, polygon: Polygon, renderer: object) -> float:
+    """Smallest distance from the text box to the polygon boundary."""
+    bbox = artist.get_window_extent(renderer=renderer).transformed(axes.transData.inverted())
+    samples = (
+        (bbox.x0, bbox.y0),
+        (bbox.x1, bbox.y0),
+        (bbox.x1, bbox.y1),
+        (bbox.x0, bbox.y1),
+        ((bbox.x0 + bbox.x1) / 2.0, bbox.y0),
+        ((bbox.x0 + bbox.x1) / 2.0, bbox.y1),
+        (bbox.x0, (bbox.y0 + bbox.y1) / 2.0),
+        (bbox.x1, (bbox.y0 + bbox.y1) / 2.0),
+    )
+    count = len(polygon)
+    return min(
+        _point_segment_distance(
+            x,
+            y,
+            polygon[index][0],
+            polygon[index][1],
+            polygon[(index + 1) % count][0],
+            polygon[(index + 1) % count][1],
+        )
+        for x, y in samples
+        for index in range(count)
+    )
+
+
 def _house_labels_fit(
     axes: Axes,
     artists: list[Text],
     polygon: Polygon,
     renderer: object,
+    label_count: int,
 ) -> bool:
-    accept = inset_polygon(polygon, ACCEPT_INSET)
+    accept_ratio = 0.11 if label_count >= 3 else ACCEPT_INSET
+    clearance = 0.045 if label_count >= 3 else 0.02
+    accept = inset_polygon(polygon, accept_ratio)
     for artist in artists:
         if not _bbox_corners_inside(axes, artist, accept, renderer):
             return False
+        if str(artist.get_gid() or "").startswith("planet-"):
+            if _bbox_edge_clearance(axes, artist, polygon, renderer) < clearance:
+                return False
     for index, artist in enumerate(artists):
         for other in artists[index + 1 :]:
             if _bboxes_overlap(artist, other, axes, renderer):
@@ -1378,6 +1510,7 @@ def _draw_house_labels(
                 grouped[house],
                 fonts[house],
                 rashi_fonts[house],
+                house,
             )
             if layout is None:
                 unplaced.add(house)
@@ -1399,7 +1532,13 @@ def _draw_house_labels(
         renderer = figure.canvas.get_renderer()
         failed: set[int] = set(unplaced)
         for house, artists in placed.items():
-            if not _house_labels_fit(axes, artists, HOUSE_POLYGONS[house], renderer):
+            if not _house_labels_fit(
+                axes,
+                artists,
+                HOUSE_POLYGONS[house],
+                renderer,
+                len(grouped[house]),
+            ):
                 failed.add(house)
 
         if not failed:
