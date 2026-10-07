@@ -329,6 +329,29 @@ def _seventh_house(chart: dict[str, Any], label: str) -> dict[str, Any]:
     }
 
 
+def _nadi_cancelled(
+    same_nadi: bool,
+    male_sign: int,
+    female_sign: int,
+    male_nakshatra: str,
+    female_nakshatra: str,
+    male_pada: int,
+    female_pada: int,
+    male_lord: str,
+    female_lord: str,
+) -> bool:
+    """Classical Nadi parihar. Identical nakshatra and pada never cancel."""
+    if not same_nadi:
+        return False
+    if male_sign == female_sign and male_nakshatra != female_nakshatra:
+        return True
+    if male_nakshatra == female_nakshatra and male_pada != female_pada:
+        return True
+    if male_sign != female_sign and male_lord == female_lord:
+        return True
+    return False
+
+
 def _gana_points(male_gana: str, female_gana: str) -> float:
     """Gana points depend on which chart is the groom and which is the bride."""
     if male_gana == female_gana:
@@ -476,14 +499,17 @@ def get_compatibility_json(
     male_nadi = NADI_MAP[male_nakshatra]
     female_nadi = NADI_MAP[female_nakshatra]
     same_nadi = male_nadi == female_nadi
-    nadi_cancelled = False
-    if same_nadi:
-        different_nakshatra = male_sign == female_sign and male_nakshatra != female_nakshatra
-        different_pada = (
-            male_nakshatra == female_nakshatra and male_moon["pada"] != female_moon["pada"]
-        )
-        if different_nakshatra or different_pada or male_lord == female_lord:
-            nadi_cancelled = True
+    nadi_cancelled = _nadi_cancelled(
+        same_nadi,
+        male_sign,
+        female_sign,
+        male_nakshatra,
+        female_nakshatra,
+        int(male_moon["pada"]),
+        int(female_moon["pada"]),
+        male_lord,
+        female_lord,
+    )
     nadi_points = 8.0 if (not same_nadi or nadi_cancelled) else 0.0
     kootas["nadi"] = {
         "score": nadi_points,
