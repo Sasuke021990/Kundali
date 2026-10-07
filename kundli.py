@@ -2383,7 +2383,9 @@ def generate_forecast_window(
     execution day when Tara is Sadhana and the Moon is not in Chandrashtama.
     ``dasha_transition`` is true only when the mahadasha-antardasha-pratyantardasha
     string differs from the previous civil day. Jupiter, Saturn, Rahu, and Ketu
-    signs are summarized once for a month-scale reading.
+    signs are summarized once for a month-scale reading. Each row also carries
+    ``daily_panchanga`` for the natal place: topocentric sunrise, the five limbs
+    at sunrise, and Rahu, Yamaganda, and Gulika.
     """
     if isinstance(days, bool) or not isinstance(days, int) or days < 1 or days > 3660:
         raise ValueError("Forecast days must be an integer from 1 to 3660.")
@@ -2394,9 +2396,14 @@ def generate_forecast_window(
             f"Forecast start date must be YYYY-MM-DD, got '{start_date_str}'."
         ) from exc
 
+    from panchanga import get_daily_panchanga
+
     chart = _load_natal_chart(natal_chart)
     native_dob = _chart_text(chart, "metadata.dob")
     native_lagna = _chart_text(chart, "lagna.sign")
+    observer_latitude = _chart_number(chart, "metadata.coordinates.latitude")
+    observer_longitude = _chart_number(chart, "metadata.coordinates.longitude")
+    observer_zone = _chart_text(chart, "metadata.timezone")
 
     prior_date = (start_date - timedelta(days=1)).isoformat()
     try:
@@ -2484,6 +2491,13 @@ def generate_forecast_window(
                 )
                 previous_signs[name] = sign
 
+        panchanga = get_daily_panchanga(
+            current_date,
+            latitude=observer_latitude,
+            longitude=observer_longitude,
+            timezone_name=observer_zone,
+        )
+        daily_panchanga = panchanga["daily_panchanga"]
         timeline.append(
             {
                 "date": current_date,
@@ -2498,6 +2512,7 @@ def generate_forecast_window(
                 "tara_bala": tara_bala,
                 "is_favorable": bool(lunar["is_tara_favorable"]) and not is_chandrashtama,
                 "risk_flags": risk_flags,
+                "daily_panchanga": daily_panchanga,
             }
         )
 

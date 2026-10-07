@@ -1,10 +1,12 @@
-"""Five HTTP APIs, each with its own Swagger UI.
+"""HTTP APIs, each with its own Swagger UI.
 
 Kundli:         /kundli/docs
 Timing:         /timing/docs
 Forecast:       /forecast/docs
 Compatibility:  /compatibility/docs
 Ashtakavarga:   /ashtakavarga/docs
+Saturn cycles:  /saturn-cycles/docs
+Panchanga:      /panchanga/docs
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from jyotish_api.service import (
     build_compatibility,
     build_forecast,
     build_kundli,
+    build_panchanga,
     build_saturn_cycles,
     build_timing,
 )
@@ -33,6 +36,7 @@ FORECAST_MCP_PORT = 8744
 COMPATIBILITY_MCP_PORT = 8745
 ASHTAKAVARGA_MCP_PORT = 8746
 SATURN_MCP_PORT = 8747
+PANCHANGA_MCP_PORT = 8748
 
 
 class BirthBody(BaseModel):
@@ -110,6 +114,35 @@ class AshtakavargaBody(BaseModel):
     target_time: str = Field("12:00", examples=["09:00"])
 
 
+class PanchangaBody(BaseModel):
+    date: str = Field(examples=["2026-10-15"], description="Civil date, YYYY-MM-DD.")
+    at_time: str | None = Field(
+        None,
+        examples=["09:00"],
+        description="Local HH:MM. A time before sunrise uses the previous solar day.",
+    )
+    location: str | None = Field(
+        None,
+        examples=["Gadag, Karnataka"],
+        description="Observer place. Rahu Kaalam is computed here, not at a fixed clock.",
+    )
+    latitude: float | None = Field(None, examples=[15.4316])
+    longitude: float | None = Field(None, examples=[75.635])
+    elevation_m: float | None = Field(
+        None,
+        examples=[648],
+        description="Meters above sea level. Looked up when omitted.",
+    )
+    timezone_name: str | None = Field(None, examples=["Asia/Kolkata"])
+    natal_chart: dict[str, Any] | None = Field(
+        None,
+        description="Used for the observer place when location and coordinates are omitted.",
+    )
+    dob: str | None = Field(None, examples=["1990-04-02"])
+    tob: str | None = Field(None, examples=["06:30"])
+    birth_location: str | None = Field(None, examples=["Gadag, Karnataka"])
+
+
 class SaturnCycleBody(BaseModel):
     as_of_date: str = Field(examples=["2026-10-07"], description="Civil date, YYYY-MM-DD.")
     as_of_time: str = Field("09:00", examples=["09:00"], description="Local time HH:MM.")
@@ -179,7 +212,9 @@ It does not repeat the full nine-graha state.
 
 `critical_windows` lists Chandrashtama, Vipat/Naidhana, Sadhana, and transit combustion.
 `major_transits` lists Jupiter, Saturn, Rahu, and Ketu once, plus any sign change
-inside the window. `dasha_transition: true` is an inflection day.
+inside the window. `dasha_transition: true` is an inflection day. Each timeline
+row includes `daily_panchanga` for the birthplace: topocentric sunrise and sunset,
+the panchanga limbs at sunrise, and Rahu, Yamaganda, and Gulika.
 
 For a month outlook, keep `critical_windows` and `major_transits`. For one day,
 take that single `timeline` row and call the Timing API for the degrees.
@@ -221,6 +256,27 @@ natal Moon). Dates are sidereal ingresses. A retrograde return to the same sign
 stays inside one passage.
 """.strip()
 saturn_api = _documented_app("Saturn Cycle API", SATURN_DESCRIPTION, "/saturn-cycles")
+PANCHANGA_DESCRIPTION = """
+Local panchanga for one solar day, and the three daytime windows used to avoid
+starting work: Rahu Kaalam, Yamaganda, and Gulika Kaalam.
+
+Sunrise and sunset are topocentric. Swiss Ephemeris `rise_trans` uses the
+observer latitude, longitude, and elevation, with refraction estimated from
+that height. The weekday is the weekday of sunrise, not of civil midnight.
+Tithi, nakshatra, yoga, and karana are Lahiri positions of the Sun and Moon
+at that sunrise. Rikta tithis are 4, 9, and 14 in either paksha. Vyatipata and
+Vaidhriti are the malefic yogas. Vishti is Bhadra.
+
+The daylight arc is split into eight equal parts. The windows move between
+North and South India because sunrise moves. Do not replace them with a fixed
+1:30–3:00 style clock.
+
+Send `location` for the place where the action happens, or `latitude`,
+`longitude`, and optional `elevation_m`. A natal chart or birth fields are
+used only when no observer place is sent. `at_time` before sunrise selects
+the previous solar day.
+""".strip()
+panchanga_api = _documented_app("Panchanga API", PANCHANGA_DESCRIPTION, "/panchanga")
 
 
 @kundli_api.post(
@@ -314,6 +370,30 @@ def ashtakavarga_bindus(body: AshtakavargaBody) -> dict[str, Any]:
         raise _failure(exc) from exc
 
 
+@panchanga_api.post(
+    "/day",
+    summary="Sunrise panchanga and Rahu, Yamaganda, Gulika",
+    response_description="Topocentric solar day, five limbs, and three inauspicious windows.",
+)
+def panchanga_day(body: PanchangaBody) -> dict[str, Any]:
+    try:
+        return build_panchanga(
+            body.date,
+            body.at_time,
+            body.location,
+            body.latitude,
+            body.longitude,
+            body.elevation_m,
+            body.timezone_name,
+            body.natal_chart,
+            body.dob,
+            body.tob,
+            body.birth_location,
+        )
+    except ValueError as exc:
+        raise _failure(exc) from exc
+
+
 @saturn_api.post(
     "/track",
     summary="Sade Sati, Kantaka Shani, and Ashtama Shani",
@@ -343,6 +423,7 @@ def connection_card(host: str = "127.0.0.1") -> dict[str, Any]:
             "compatibility": f"http://{host}:{API_PORT}/compatibility/docs",
             "ashtakavarga": f"http://{host}:{API_PORT}/ashtakavarga/docs",
             "saturn_cycles": f"http://{host}:{API_PORT}/saturn-cycles/docs",
+            "panchanga": f"http://{host}:{API_PORT}/panchanga/docs",
         },
         "openapi": {
             "kundli": f"http://{host}:{API_PORT}/kundli/openapi.json",
@@ -351,6 +432,7 @@ def connection_card(host: str = "127.0.0.1") -> dict[str, Any]:
             "compatibility": f"http://{host}:{API_PORT}/compatibility/openapi.json",
             "ashtakavarga": f"http://{host}:{API_PORT}/ashtakavarga/openapi.json",
             "saturn_cycles": f"http://{host}:{API_PORT}/saturn-cycles/openapi.json",
+            "panchanga": f"http://{host}:{API_PORT}/panchanga/openapi.json",
         },
         "mcp": {
             "kundli": f"http://{host}:{KUNDLI_MCP_PORT}/mcp",
@@ -359,6 +441,7 @@ def connection_card(host: str = "127.0.0.1") -> dict[str, Any]:
             "compatibility": f"http://{host}:{COMPATIBILITY_MCP_PORT}/mcp",
             "ashtakavarga": f"http://{host}:{ASHTAKAVARGA_MCP_PORT}/mcp",
             "saturn_cycles": f"http://{host}:{SATURN_MCP_PORT}/mcp",
+            "panchanga": f"http://{host}:{PANCHANGA_MCP_PORT}/mcp",
         },
     }
 
@@ -383,6 +466,7 @@ for mounted in (
     compatibility_api,
     ashtakavarga_api,
     saturn_api,
+    panchanga_api,
 ):
     mounted.add_middleware(
         CORSMiddleware,
@@ -397,6 +481,7 @@ app.mount("/forecast", forecast_api)
 app.mount("/compatibility", compatibility_api)
 app.mount("/ashtakavarga", ashtakavarga_api)
 app.mount("/saturn-cycles", saturn_api)
+app.mount("/panchanga", panchanga_api)
 
 
 @app.get("/health", include_in_schema=False)
@@ -419,6 +504,7 @@ def home() -> str:
         "compatibility": "Compatibility",
         "ashtakavarga": "Ashtakavarga",
         "saturn_cycles": "Saturn cycles",
+        "panchanga": "Panchanga",
     }
     rows = []
     for name, url in card["swagger"].items():
@@ -438,7 +524,7 @@ def home() -> str:
 </head>
 <body>
   <h1>Jyotish telemetry</h1>
-  <p>Five HTTP APIs: natal chart, timing, forecast, compatibility, and Ashtakavarga.</p>
+  <p>Seven HTTP APIs, from the natal chart through the local panchanga.</p>
   <ul>
     {''.join(rows)}
   </ul>

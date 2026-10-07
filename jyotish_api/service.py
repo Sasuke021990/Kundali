@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ashtakavarga import get_ashtakavarga_json
+from panchanga import get_daily_panchanga
 from saturn_cycles import get_saturn_cycles
 from kundli import (
     _load_natal_chart,
@@ -105,6 +106,36 @@ def build_ashtakavarga(
         if not isinstance(transits, dict):
             raise ValueError("Timing telemetry is missing transits.")
     return get_ashtakavarga_json(chart, transits)
+
+
+def build_panchanga(
+    date: str,
+    at_time: str | None = None,
+    location: str | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
+    elevation_m: float | None = None,
+    timezone_name: str | None = None,
+    natal_chart: dict[str, Any] | str | None = None,
+    dob: str | None = None,
+    tob: str | None = None,
+    birth_location: str | None = None,
+) -> dict[str, Any]:
+    """Topocentric panchanga and the three daytime inauspicious windows."""
+    chart = None
+    has_birth = natal_chart is not None or (dob and tob and birth_location)
+    if latitude is None and not location and has_birth:
+        chart = resolve_natal_chart(natal_chart, dob, tob, birth_location)
+    return get_daily_panchanga(
+        date,
+        location=location,
+        at_time=at_time,
+        latitude=latitude,
+        longitude=longitude,
+        elevation_m=elevation_m,
+        timezone_name=timezone_name,
+        natal_chart=chart,
+    )
 
 
 def build_saturn_cycles(

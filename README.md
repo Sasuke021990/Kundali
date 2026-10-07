@@ -136,9 +136,22 @@ natal = get_kundli_json("1990-04-02", "06:30", "Gadag, Karnataka")
 print(get_saturn_cycles(natal, "2026-10-07", "09:00")["sade_sati"]["next_ingress_date"])
 ```
 
+## Panchanga
+
+`get_daily_panchanga` takes the observer's latitude, longitude, and elevation. Sunrise and sunset come from Swiss Ephemeris `rise_trans` at that point, with refraction estimated from the height. Tithi, nakshatra, yoga, and karana are Lahiri positions at sunrise. The weekday is the weekday of sunrise.
+
+Rahu Kaalam, Yamaganda, and Gulika Kaalam are eighths of that sunrise-to-sunset arc. A clock time such as 13:30–15:00 is only the Thursday Rahu window of a 06:00–18:00 day. Pass the place where the action happens. North and South India do not share those clock times.
+
+```python
+from panchanga import get_daily_panchanga
+
+gadag = get_daily_panchanga("2026-10-15", location="Gadag, Karnataka")
+print(gadag["daily_panchanga"]["inauspicious_windows"]["rahu_kaalam"])
+```
+
 ## HTTP APIs and MCP servers
 
-Six HTTP APIs and six MCP servers call the same functions. One Docker image runs all of them.
+Seven HTTP APIs and seven MCP servers call the same functions. One Docker image runs all of them.
 
 | Service | What it calls | Swagger | MCP endpoint |
 | --- | --- | --- | --- |
@@ -148,8 +161,9 @@ Six HTTP APIs and six MCP servers call the same functions. One Docker image runs
 | Compatibility | `get_compatibility_json` | http://127.0.0.1:8741/compatibility/docs | http://127.0.0.1:8745/mcp |
 | Ashtakavarga | `get_ashtakavarga_json` | http://127.0.0.1:8741/ashtakavarga/docs | http://127.0.0.1:8746/mcp |
 | Saturn cycles | `get_saturn_cycles` | http://127.0.0.1:8741/saturn-cycles/docs | http://127.0.0.1:8747/mcp |
+| Panchanga | `get_daily_panchanga` | http://127.0.0.1:8741/panchanga/docs | http://127.0.0.1:8748/mcp |
 
-OpenAPI documents are on port 8741 at `/kundli/openapi.json`, `/timing/openapi.json`, `/forecast/openapi.json`, `/compatibility/openapi.json`, `/ashtakavarga/openapi.json`, and `/saturn-cycles/openapi.json`. ReDoc is the same path with `/redoc` instead of `/docs`. The index is at http://127.0.0.1:8741/ and JSON URLs are at http://127.0.0.1:8741/connections.
+OpenAPI documents are on port 8741 at `/kundli/openapi.json`, `/timing/openapi.json`, `/forecast/openapi.json`, `/compatibility/openapi.json`, `/ashtakavarga/openapi.json`, `/saturn-cycles/openapi.json`, and `/panchanga/openapi.json`. ReDoc is the same path with `/redoc` instead of `/docs`. The index is at http://127.0.0.1:8741/ and JSON URLs are at http://127.0.0.1:8741/connections.
 
 ### Run with Docker
 
@@ -157,13 +171,13 @@ OpenAPI documents are on port 8741 at `/kundli/openapi.json`, `/timing/openapi.j
 docker compose up --build
 ```
 
-The API container listens on 8741. The MCP containers listen on 8742–8747. Each container has a `GET /health` check. The chart calls need outbound access to OpenStreetMap Nominatim.
+The API container listens on 8741. The MCP containers listen on 8742–8748. Each container has a `GET /health` check. Chart calls need outbound access to OpenStreetMap Nominatim. Panchanga looks up elevation from Open-Meteo when `elevation_m` is omitted.
 
 One container can run every process instead of Compose:
 
 ```bash
 docker build -t jyotish-telemetry .
-docker run --rm -p 8741:8741 -p 8742:8742 -p 8743:8743 -p 8744:8744 -p 8745:8745 -p 8746:8746 -p 8747:8747 jyotish-telemetry
+docker run --rm -p 8741:8741 -p 8742:8742 -p 8743:8743 -p 8744:8744 -p 8745:8745 -p 8746:8746 -p 8747:8747 -p 8748:8748 jyotish-telemetry
 ```
 
 ### Run without Docker
@@ -178,6 +192,7 @@ MCP_PORT=8744 python -m mcp_servers.forecast_server
 MCP_PORT=8745 python -m mcp_servers.compatibility_server
 MCP_PORT=8746 python -m mcp_servers.ashtakavarga_server
 MCP_PORT=8747 python -m mcp_servers.saturn_server
+MCP_PORT=8748 python -m mcp_servers.panchanga_server
 ```
 
 Start each process in its own terminal. `MCP_HOST` defaults to `0.0.0.0`.
@@ -244,6 +259,15 @@ Ashtakavarga, `POST /ashtakavarga/bindus`:
 }
 ```
 
+Panchanga, `POST /panchanga/day`. `location` is where the action happens:
+
+```json
+{
+  "date": "2026-10-15",
+  "location": "Gadag, Karnataka"
+}
+```
+
 A bad date, an unknown place, or a daylight-saving gap returns HTTP 400 with the validation message in `detail`.
 
 For a month outlook, send a model the natal chart, `critical_windows`, and `major_transits`. For one day, send that `timeline` row plus the Timing API degrees. Treat `dasha_transition: true` as the day the period changes.
@@ -274,6 +298,14 @@ The servers speak streamable HTTP at `/mcp` and answer JSON. In Cursor, add this
     "jyotish-ashtakavarga": {
       "type": "http",
       "url": "http://127.0.0.1:8746/mcp"
+    },
+    "jyotish-saturn": {
+      "type": "http",
+      "url": "http://127.0.0.1:8747/mcp"
+    },
+    "jyotish-panchanga": {
+      "type": "http",
+      "url": "http://127.0.0.1:8748/mcp"
     }
   }
 }
@@ -287,5 +319,6 @@ The servers speak streamable HTTP at `/mcp` and answer JSON. In Cursor, add this
 | jyotish-compatibility | `get_compatibility_json` | `male_chart` and `female_chart`, or birth fields for each person. |
 | jyotish-ashtakavarga | `get_ashtakavarga_json` | `natal_chart`, or `dob` + `tob` + `location`. `target_date` is optional. |
 | jyotish-saturn | `get_saturn_cycles` | `as_of_date`. Also `natal_chart`, or `dob` + `tob` + `location`. `as_of_time` defaults to `09:00`. |
+| jyotish-panchanga | `get_daily_panchanga` | `date`. Also `location`, or `latitude` + `longitude`, or a natal chart. |
 
 Health checks for the MCP processes are `GET http://127.0.0.1:8742/health` through `GET http://127.0.0.1:8746/health`. Those routes are not MCP tools.
