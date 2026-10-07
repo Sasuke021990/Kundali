@@ -123,9 +123,22 @@ timing = get_timing_telemetry(natal, "2026-10-15", "09:00")
 print(timing["ashtakavarga"]["transit_filter_status"])
 ```
 
+## Saturn cycles
+
+`get_saturn_cycles` reads Lahiri Saturn sign passages from `data/saturn_sign_passages.json` (1880–2180 UTC) and maps them onto the natal Moon and lagna. A request does not search the ephemeris. Rebuild the table with `python -m saturn_cycles` only when the ayanamsa or the covered range changes.
+
+Sade Sati is Saturn in the 12th, 1st, or 2nd from the natal Moon. Each of those blocks, plus Ashtama Shani and Kantaka Shani, returns `current_status` and `next_ingress_date`. A retrograde return to the same sign stays inside one passage, so a Rising end date is not forced to equal the Peak start date.
+
+```python
+from kundli import get_kundli_json, get_saturn_cycles
+
+natal = get_kundli_json("1990-04-02", "06:30", "Gadag, Karnataka")
+print(get_saturn_cycles(natal, "2026-10-07", "09:00")["sade_sati"]["next_ingress_date"])
+```
+
 ## HTTP APIs and MCP servers
 
-Five HTTP APIs and five MCP servers call the same functions. One Docker image runs all of them.
+Six HTTP APIs and six MCP servers call the same functions. One Docker image runs all of them.
 
 | Service | What it calls | Swagger | MCP endpoint |
 | --- | --- | --- | --- |
@@ -136,7 +149,7 @@ Five HTTP APIs and five MCP servers call the same functions. One Docker image ru
 | Ashtakavarga | `get_ashtakavarga_json` | http://127.0.0.1:8741/ashtakavarga/docs | http://127.0.0.1:8746/mcp |
 | Saturn cycles | `get_saturn_cycles` | http://127.0.0.1:8741/saturn-cycles/docs | http://127.0.0.1:8747/mcp |
 
-OpenAPI documents are on port 8741 at `/kundli/openapi.json`, `/timing/openapi.json`, `/forecast/openapi.json`, `/compatibility/openapi.json`, and `/ashtakavarga/openapi.json`. ReDoc is the same path with `/redoc` instead of `/docs`. The index is at http://127.0.0.1:8741/ and JSON URLs are at http://127.0.0.1:8741/connections.
+OpenAPI documents are on port 8741 at `/kundli/openapi.json`, `/timing/openapi.json`, `/forecast/openapi.json`, `/compatibility/openapi.json`, `/ashtakavarga/openapi.json`, and `/saturn-cycles/openapi.json`. ReDoc is the same path with `/redoc` instead of `/docs`. The index is at http://127.0.0.1:8741/ and JSON URLs are at http://127.0.0.1:8741/connections.
 
 ### Run with Docker
 

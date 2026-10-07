@@ -15,6 +15,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY kundli.py compatibility.py ashtakavarga.py saturn_cycles.py .
+COPY data ./data
 COPY jyotish_api ./jyotish_api
 COPY mcp_servers ./mcp_servers
 

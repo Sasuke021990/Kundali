@@ -1,11 +1,24 @@
-"""Sade Sati, Kantaka Shani, and Ashtama Shani from Saturn's sidereal ingresses."""
+"""Sade Sati, Kantaka Shani, and Ashtama Shani from a precomputed Saturn table.
+
+Saturn's Lahiri sign passages are stored in ``data/saturn_sign_passages.json``.
+A request maps those dates onto the natal Moon and lagna. It does not run a
+Swiss Ephemeris search. Retrograde re-entries stay inside one passage, so a
+Rising end date is not forced to equal the Peak start date.
+"""
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import swisseph as swe
+
+_TABLE_PATH = Path(__file__).with_name("data") / "saturn_sign_passages.json"
+_TABLE_START = datetime(1880, 1, 1, tzinfo=timezone.utc)
+_TABLE_END = datetime(2180, 1, 1, tzinfo=timezone.utc)
 
 SIGN_NAMES: tuple[str, ...] = (
     "Aries",
@@ -29,7 +42,6 @@ SADE_SATI_PHASES = {
 # Retrograde re-entry of the same sign stays inside one passage.
 _MERGE_GAP_DAYS = 400.0
 _STEP_DAYS = 5.0
-_SPAN_CACHE: dict[tuple[str, str, int, int], list[dict[str, object]]] = {}
 
 
 def _require(chart: dict[str, object], path: str) -> object:
@@ -63,13 +75,6 @@ def _jd(moment: datetime) -> float:
     return float(swe.julday(utc.year, utc.month, utc.day, hour))
 
 
-def _local_date(julian_day: float, zone: ZoneInfo) -> str:
-    year, month, day, ut_hour = swe.revjul(julian_day, swe.GREG_CAL)
-    moment = datetime(int(year), int(month), int(day), tzinfo=timezone.utc)
-    moment += timedelta(hours=float(ut_hour))
-    return moment.astimezone(zone).date().isoformat()
-
-
 def _bisect_ingress(before: float, after: float, new_sign: int) -> float:
     lo, hi = before, after
     for _ in range(48):
@@ -98,55 +103,116 @@ def _ingresses(start_jd: float, end_jd: float) -> list[tuple[float, int]]:
     return changes
 
 
-def _passages(changes: list[tuple[float, int]]) -> list[dict[str, object]]:
-    """One span per sign visit, with retrograde gaps shorter than 400 days merged."""
-    if not changes:
-        return []
-    raw: list[list[float | int]] = []
+def write_passage_table(path: Path = _TABLE_PATH) -> None:
+    """Rebuild the checked-in Lahiri Saturn table. Not used by API requests."""
+    changes = _ingresses(_jd(_TABLE_START), _jd(_TABLE_END))
+    raw: list[dict[str, str | int]] = []
     for index, (start, sign) in enumerate(changes):
-        end = changes[index + 1][0] if index + 1 < len(changes) else start
+        end = changes[index + 1][0] if index + 1 < len(changes) else _jd(_TABLE_END)
         if end <= start:
             continue
-        raw.append([sign, start, end])
-    merged: list[list[float | int]] = []
-    for sign, start, end in raw:
-        earlier = next((item for item in reversed(merged) if item[0] == sign), None)
-        gap = float(start) - float(earlier[2]) if earlier else _MERGE_GAP_DAYS + 1
-        if earlier is not None and gap <= _MERGE_GAP_DAYS:
-            earlier[2] = max(float(earlier[2]), float(end))
+        raw.append(
+            {
+                "sign_number": int(sign),
+                "sign": SIGN_NAMES[int(sign) - 1],
+                "start_utc": _utc_iso(start),
+                "end_utc": _utc_iso(end),
+            }
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "ayanamsa": "Lahiri",
+        "ephemeris": "Moshier",
+        "start_utc": _TABLE_START.isoformat(),
+        "end_utc": _TABLE_END.isoformat(),
+        "passages": raw,
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    _raw_passages.cache_clear()
+    _merged_passages.cache_clear()
+
+
+def _utc_iso(julian_day: float) -> str:
+    year, month, day, ut_hour = swe.revjul(julian_day, swe.GREG_CAL)
+    moment = datetime(int(year), int(month), int(day), tzinfo=timezone.utc)
+    moment += timedelta(hours=float(ut_hour))
+    return moment.isoformat()
+
+
+@lru_cache(maxsize=1)
+def _raw_passages() -> tuple[dict[str, object], ...]:
+    if not _TABLE_PATH.is_file():
+        raise ValueError(
+            f"Saturn passage table is missing at {_TABLE_PATH}. "
+            "Rebuild it with python -m saturn_cycles."
+        )
+    loaded = json.loads(_TABLE_PATH.read_text(encoding="utf-8"))
+    rows = loaded.get("passages")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("Saturn passage table has no passages.")
+    parsed: list[dict[str, object]] = []
+    for row in rows:
+        parsed.append(
+            {
+                "sign": int(row["sign_number"]),
+                "start": datetime.fromisoformat(str(row["start_utc"])),
+                "end": datetime.fromisoformat(str(row["end_utc"])),
+            }
+        )
+    return tuple(parsed)
+
+
+@lru_cache(maxsize=1)
+def _merged_passages() -> tuple[dict[str, object], ...]:
+    """First ingress through final egress. Retrograde gaps stay inside the span."""
+    merged: list[dict[str, object]] = []
+    for row in _raw_passages():
+        sign = int(row["sign"])
+        start = row["start"]
+        end = row["end"]
+        if not isinstance(start, datetime) or not isinstance(end, datetime):
+            raise ValueError("Saturn passage dates must be datetimes.")
+        earlier = next((item for item in reversed(merged) if item["sign"] == sign), None)
+        earlier_end = earlier["end"] if earlier is not None else None
+        if isinstance(earlier_end, datetime):
+            gap_days = (start - earlier_end).total_seconds() / 86400.0
         else:
-            merged.append([sign, start, end])
-    return [
-        {"sign": int(sign), "start_jd": float(start), "end_jd": float(end)}
-        for sign, start, end in merged
-    ]
+            gap_days = _MERGE_GAP_DAYS + 1
+        if earlier is not None and gap_days <= _MERGE_GAP_DAYS:
+            if isinstance(earlier_end, datetime) and end > earlier_end:
+                earlier["end"] = end
+        else:
+            merged.append({"sign": sign, "start": start, "end": end})
+    return tuple(merged)
 
 
-def _chart_spans(chart: dict[str, object], zone: ZoneInfo) -> list[dict[str, object]]:
-    birth_text = str(_require(chart, "metadata.utc_datetime"))
-    birth = datetime.fromisoformat(birth_text)
-    if birth.tzinfo is None:
-        raise ValueError("Natal chart field 'metadata.utc_datetime' must include a UTC offset.")
-    moon = int(_require(chart, "planets.Moon.sign_number"))
-    lagna = int(_require(chart, "lagna.sign_number"))
-    key = (birth.astimezone(timezone.utc).isoformat(), str(zone), moon, lagna)
-    cached = _SPAN_CACHE.get(key)
-    if cached is not None:
-        return cached
-    start = birth.astimezone(timezone.utc) - timedelta(days=40)
-    end = birth.astimezone(timezone.utc) + timedelta(days=int(100 * 365.2425))
-    spans = _passages(_ingresses(_jd(start), _jd(end)))
-    _SPAN_CACHE[key] = spans
-    return spans
+def _sign_on(moment: datetime) -> int:
+    for row in _raw_passages():
+        start = row["start"]
+        end = row["end"]
+        if start <= moment < end:  # type: ignore[operator]
+            return int(row["sign"])
+    raise ValueError(
+        "As-of date is outside the precomputed Saturn table "
+        f"({_TABLE_START.date().isoformat()} to {_TABLE_END.date().isoformat()} UTC)."
+    )
+
+
+def _civil(moment: datetime, zone: ZoneInfo) -> str:
+    return moment.astimezone(zone).date().isoformat()
 
 
 def _phase_row(span: dict[str, object], zone: ZoneInfo, phase: str) -> dict[str, str]:
     sign = int(span["sign"])
+    start = span["start"]
+    end = span["end"]
+    if not isinstance(start, datetime) or not isinstance(end, datetime):
+        raise ValueError("Saturn passage dates must be datetimes.")
     return {
         "phase": phase,
         "sign": SIGN_NAMES[sign - 1],
-        "start": _local_date(float(span["start_jd"]), zone),
-        "end": _local_date(float(span["end_jd"]), zone),
+        "start": _civil(start, zone),
+        "end": _civil(end, zone),
     }
 
 
@@ -159,8 +225,9 @@ def get_saturn_cycles(
 
     Sade Sati is Saturn in the 12th, 1st, or 2nd from the natal Moon. Kantaka
     Shani is the 4th from the natal Moon or the natal lagna. Ashtama Shani is
-    the 8th from the natal Moon. Ingress times come from a sidereal step search,
-    and a retrograde return to the same sign stays inside one passage.
+    the 8th from the natal Moon. Ingress dates come from the precomputed Lahiri
+    table. A retrograde return to the same sign stays inside one passage, so
+    adjacent phases may overlap.
     """
     if not isinstance(natal_chart, dict):
         raise ValueError("Natal chart must be the dict from get_kundli_json().")
@@ -174,14 +241,13 @@ def get_saturn_cycles(
     except ValueError as exc:
         raise ValueError("As-of date must be YYYY-MM-DD and time HH:MM.") from exc
     as_of = as_of_naive.replace(tzinfo=zone)
-    as_of_jd = _jd(as_of)
+    as_of_utc = as_of.astimezone(timezone.utc)
     moon = int(_require(natal_chart, "planets.Moon.sign_number"))
     lagna = int(_require(natal_chart, "lagna.sign_number"))
     if not 1 <= moon <= 12 or not 1 <= lagna <= 12:
         raise ValueError("Natal Moon and lagna sign numbers must be from 1 to 12.")
     birth_date = str(_require(natal_chart, "metadata.dob"))
-    spans = _chart_spans(natal_chart, zone)
-    sign_now = _saturn_sign(as_of_jd)
+    sign_now = _sign_on(as_of_utc)
     house_moon = _house_from(moon, sign_now)
     house_lagna = _house_from(lagna, sign_now)
 
@@ -189,23 +255,25 @@ def get_saturn_cycles(
     next_sade = None
     next_ashtama = None
     next_kantaka = None
-    for span in spans:
+    for span in _merged_passages():
         sign = int(span["sign"])
-        start_jd = float(span["start_jd"])
-        end_jd = float(span["end_jd"])
-        start_date = _local_date(start_jd, zone)
+        start = span["start"]
+        end = span["end"]
+        if not isinstance(start, datetime) or not isinstance(end, datetime):
+            raise ValueError("Saturn passage dates must be datetimes.")
         house = _house_from(moon, sign)
         lagna_house = _house_from(lagna, sign)
         phase = SADE_SATI_PHASES.get(house)
-        end_date = _local_date(end_jd, zone)
-        if phase and end_date >= birth_date and end_jd <= as_of_jd:
+        end_date = _civil(end, zone)
+        if phase and end_date >= birth_date and end <= as_of_utc:
             history.append(_phase_row(span, zone, phase))
-        if phase == "Rising (12th)" and start_jd > as_of_jd and next_sade is None:
-            next_sade = start_date
-        if house == 8 and start_jd > as_of_jd and next_ashtama is None:
-            next_ashtama = start_date
-        if (house == 4 or lagna_house == 4) and start_jd > as_of_jd and next_kantaka is None:
-            next_kantaka = start_date
+        if phase == "Rising (12th)" and start > as_of_utc and next_sade is None:
+            next_sade = _civil(start, zone)
+        if house == 8 and start > as_of_utc and next_ashtama is None:
+            next_ashtama = _civil(start, zone)
+        kantaka = house == 4 or lagna_house == 4
+        if kantaka and start > as_of_utc and next_kantaka is None:
+            next_kantaka = _civil(start, zone)
 
     rising = (moon - 2) % 12 + 1
     peak = moon
@@ -213,11 +281,15 @@ def get_saturn_cycles(
     ashtama_sign = (moon + 6) % 12 + 1
     kantaka_from_moon = (moon + 2) % 12 + 1
     kantaka_from_lagna = (lagna + 2) % 12 + 1
+    sade_active = house_moon in SADE_SATI_PHASES
+    ashtama_active = house_moon == 8
+    kantaka_active = house_moon == 4 or house_lagna == 4
     return {
         "as_of": {"local": as_of.isoformat(), "timezone": zone_name},
         "saturn": {"sign": SIGN_NAMES[sign_now - 1], "sign_number": sign_now},
         "sade_sati": {
-            "is_active": house_moon in SADE_SATI_PHASES,
+            "current_status": sade_active,
+            "is_active": sade_active,
             "current_phase": SADE_SATI_PHASES.get(house_moon),
             "active_house_from_moon": house_moon,
             "signs": {
@@ -225,16 +297,20 @@ def get_saturn_cycles(
                 "peak": SIGN_NAMES[peak - 1],
                 "setting": SIGN_NAMES[setting - 1],
             },
+            "next_ingress_date": next_sade,
             "next_cycle_start": next_sade,
             "cycle_history": history,
         },
         "ashtama_shani": {
-            "is_active": house_moon == 8,
+            "current_status": ashtama_active,
+            "is_active": ashtama_active,
             "sign": SIGN_NAMES[ashtama_sign - 1],
+            "next_ingress_date": next_ashtama,
             "next_occurrence": next_ashtama,
         },
         "kantaka_shani": {
-            "is_active": house_moon == 4 or house_lagna == 4,
+            "current_status": kantaka_active,
+            "is_active": kantaka_active,
             "from_moon": house_moon == 4,
             "from_lagna": house_lagna == 4,
             "house_from_moon": house_moon,
@@ -242,6 +318,12 @@ def get_saturn_cycles(
             "sign": SIGN_NAMES[sign_now - 1],
             "moon_kantaka_sign": SIGN_NAMES[kantaka_from_moon - 1],
             "lagna_kantaka_sign": SIGN_NAMES[kantaka_from_lagna - 1],
+            "next_ingress_date": next_kantaka,
             "next_occurrence": next_kantaka,
         },
     }
+
+
+if __name__ == "__main__":
+    write_passage_table()
+    print(f"Wrote {_TABLE_PATH}")
