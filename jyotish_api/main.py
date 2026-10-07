@@ -22,6 +22,7 @@ from jyotish_api.service import (
     build_compatibility,
     build_forecast,
     build_kundli,
+    build_saturn_cycles,
     build_timing,
 )
 
@@ -31,6 +32,7 @@ TIMING_MCP_PORT = 8743
 FORECAST_MCP_PORT = 8744
 COMPATIBILITY_MCP_PORT = 8745
 ASHTAKAVARGA_MCP_PORT = 8746
+SATURN_MCP_PORT = 8747
 
 
 class BirthBody(BaseModel):
@@ -106,6 +108,15 @@ class AshtakavargaBody(BaseModel):
         description="Optional civil date for transit_filter_status.",
     )
     target_time: str = Field("12:00", examples=["09:00"])
+
+
+class SaturnCycleBody(BaseModel):
+    as_of_date: str = Field(examples=["2026-10-07"], description="Civil date, YYYY-MM-DD.")
+    as_of_time: str = Field("09:00", examples=["09:00"], description="Local time HH:MM.")
+    natal_chart: dict[str, Any] | None = Field(None)
+    dob: str | None = Field(None, examples=["1990-04-02"])
+    tob: str | None = Field(None, examples=["06:30"])
+    location: str | None = Field(None, examples=["Gadag, Karnataka"])
 
 
 def _failure(exc: ValueError) -> HTTPException:
@@ -203,6 +214,13 @@ compatibility_api = _documented_app(
 ashtakavarga_api = _documented_app(
     "Ashtakavarga API", ASHTAKAVARGA_DESCRIPTION, "/ashtakavarga"
 )
+SATURN_DESCRIPTION = """
+Sade Sati (Saturn in the 12th, 1st, and 2nd from the natal Moon), Kantaka Shani
+(4th from the natal Moon or the natal lagna), and Ashtama Shani (8th from the
+natal Moon). Dates are sidereal ingresses. A retrograde return to the same sign
+stays inside one passage.
+""".strip()
+saturn_api = _documented_app("Saturn Cycle API", SATURN_DESCRIPTION, "/saturn-cycles")
 
 
 @kundli_api.post(
@@ -296,6 +314,25 @@ def ashtakavarga_bindus(body: AshtakavargaBody) -> dict[str, Any]:
         raise _failure(exc) from exc
 
 
+@saturn_api.post(
+    "/track",
+    summary="Sade Sati, Kantaka Shani, and Ashtama Shani",
+    response_description="Active phase, past passages, and the next ingress.",
+)
+def saturn_track(body: SaturnCycleBody) -> dict[str, Any]:
+    try:
+        return build_saturn_cycles(
+            body.as_of_date,
+            body.as_of_time,
+            body.natal_chart,
+            body.dob,
+            body.tob,
+            body.location,
+        )
+    except ValueError as exc:
+        raise _failure(exc) from exc
+
+
 def connection_card(host: str = "127.0.0.1") -> dict[str, Any]:
     """URLs a browser or an MCP client uses on this machine."""
     return {
@@ -305,6 +342,7 @@ def connection_card(host: str = "127.0.0.1") -> dict[str, Any]:
             "forecast": f"http://{host}:{API_PORT}/forecast/docs",
             "compatibility": f"http://{host}:{API_PORT}/compatibility/docs",
             "ashtakavarga": f"http://{host}:{API_PORT}/ashtakavarga/docs",
+            "saturn_cycles": f"http://{host}:{API_PORT}/saturn-cycles/docs",
         },
         "openapi": {
             "kundli": f"http://{host}:{API_PORT}/kundli/openapi.json",
@@ -312,6 +350,7 @@ def connection_card(host: str = "127.0.0.1") -> dict[str, Any]:
             "forecast": f"http://{host}:{API_PORT}/forecast/openapi.json",
             "compatibility": f"http://{host}:{API_PORT}/compatibility/openapi.json",
             "ashtakavarga": f"http://{host}:{API_PORT}/ashtakavarga/openapi.json",
+            "saturn_cycles": f"http://{host}:{API_PORT}/saturn-cycles/openapi.json",
         },
         "mcp": {
             "kundli": f"http://{host}:{KUNDLI_MCP_PORT}/mcp",
@@ -319,6 +358,7 @@ def connection_card(host: str = "127.0.0.1") -> dict[str, Any]:
             "forecast": f"http://{host}:{FORECAST_MCP_PORT}/mcp",
             "compatibility": f"http://{host}:{COMPATIBILITY_MCP_PORT}/mcp",
             "ashtakavarga": f"http://{host}:{ASHTAKAVARGA_MCP_PORT}/mcp",
+            "saturn_cycles": f"http://{host}:{SATURN_MCP_PORT}/mcp",
         },
     }
 
@@ -342,6 +382,7 @@ for mounted in (
     forecast_api,
     compatibility_api,
     ashtakavarga_api,
+    saturn_api,
 ):
     mounted.add_middleware(
         CORSMiddleware,
@@ -355,6 +396,7 @@ app.mount("/timing", timing_api)
 app.mount("/forecast", forecast_api)
 app.mount("/compatibility", compatibility_api)
 app.mount("/ashtakavarga", ashtakavarga_api)
+app.mount("/saturn-cycles", saturn_api)
 
 
 @app.get("/health", include_in_schema=False)
@@ -376,6 +418,7 @@ def home() -> str:
         "forecast": "Forecast",
         "compatibility": "Compatibility",
         "ashtakavarga": "Ashtakavarga",
+        "saturn_cycles": "Saturn cycles",
     }
     rows = []
     for name, url in card["swagger"].items():

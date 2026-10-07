@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ashtakavarga import get_ashtakavarga_json
+from saturn_cycles import get_saturn_cycles
 from kundli import (
     _load_natal_chart,
     generate_forecast_window,
@@ -104,3 +105,16 @@ def build_ashtakavarga(
         if not isinstance(transits, dict):
             raise ValueError("Timing telemetry is missing transits.")
     return get_ashtakavarga_json(chart, transits)
+
+
+def build_saturn_cycles(
+    as_of_date: str,
+    as_of_time: str = "09:00",
+    natal_chart: dict[str, Any] | str | None = None,
+    dob: str | None = None,
+    tob: str | None = None,
+    location: str | None = None,
+) -> dict[str, Any]:
+    """Sade Sati, Kantaka Shani, and Ashtama Shani at one local morning."""
+    chart = resolve_natal_chart(natal_chart, dob, tob, location)
+    return get_saturn_cycles(chart, as_of_date, as_of_time)

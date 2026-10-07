@@ -40,6 +40,7 @@ from timezonefinder import TimezoneFinder
 
 from ashtakavarga import get_ashtakavarga_json
 from compatibility import get_compatibility_json
+from saturn_cycles import get_saturn_cycles
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -2338,6 +2339,7 @@ def get_timing_telemetry(
             "is_chandrashtama": moon_from_natal_moon == 8,
         },
         "ashtakavarga": get_ashtakavarga_json(chart, transits),
+        "saturn_cycles": get_saturn_cycles(chart, target_date_str, target_time_str),
     }
 
 
@@ -2519,6 +2521,7 @@ def generate_forecast_window(
             "sign_changes": sign_changes,
         },
         "ashtakavarga": natal_ashtakavarga,
+        "saturn_cycles": get_saturn_cycles(chart, start_date_str, time_str),
         "timeline": timeline,
     }
 

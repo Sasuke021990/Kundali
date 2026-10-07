@@ -134,6 +134,7 @@ Five HTTP APIs and five MCP servers call the same functions. One Docker image ru
 | Forecast | `generate_forecast_window` | http://127.0.0.1:8741/forecast/docs | http://127.0.0.1:8744/mcp |
 | Compatibility | `get_compatibility_json` | http://127.0.0.1:8741/compatibility/docs | http://127.0.0.1:8745/mcp |
 | Ashtakavarga | `get_ashtakavarga_json` | http://127.0.0.1:8741/ashtakavarga/docs | http://127.0.0.1:8746/mcp |
+| Saturn cycles | `get_saturn_cycles` | http://127.0.0.1:8741/saturn-cycles/docs | http://127.0.0.1:8747/mcp |
 
 OpenAPI documents are on port 8741 at `/kundli/openapi.json`, `/timing/openapi.json`, `/forecast/openapi.json`, `/compatibility/openapi.json`, and `/ashtakavarga/openapi.json`. ReDoc is the same path with `/redoc` instead of `/docs`. The index is at http://127.0.0.1:8741/ and JSON URLs are at http://127.0.0.1:8741/connections.
 
@@ -143,13 +144,13 @@ OpenAPI documents are on port 8741 at `/kundli/openapi.json`, `/timing/openapi.j
 docker compose up --build
 ```
 
-The API container listens on 8741. The five MCP containers listen on 8742–8746. Each container has a `GET /health` check. The chart calls need outbound access to OpenStreetMap Nominatim.
+The API container listens on 8741. The MCP containers listen on 8742–8747. Each container has a `GET /health` check. The chart calls need outbound access to OpenStreetMap Nominatim.
 
 One container can run every process instead of Compose:
 
 ```bash
 docker build -t jyotish-telemetry .
-docker run --rm -p 8741:8741 -p 8742:8742 -p 8743:8743 -p 8744:8744 -p 8745:8745 -p 8746:8746 jyotish-telemetry
+docker run --rm -p 8741:8741 -p 8742:8742 -p 8743:8743 -p 8744:8744 -p 8745:8745 -p 8746:8746 -p 8747:8747 jyotish-telemetry
 ```
 
 ### Run without Docker
@@ -163,6 +164,7 @@ MCP_PORT=8743 python -m mcp_servers.timing_server
 MCP_PORT=8744 python -m mcp_servers.forecast_server
 MCP_PORT=8745 python -m mcp_servers.compatibility_server
 MCP_PORT=8746 python -m mcp_servers.ashtakavarga_server
+MCP_PORT=8747 python -m mcp_servers.saturn_server
 ```
 
 Start each process in its own terminal. `MCP_HOST` defaults to `0.0.0.0`.
@@ -271,5 +273,6 @@ The servers speak streamable HTTP at `/mcp` and answer JSON. In Cursor, add this
 | jyotish-forecast | `generate_forecast_window` | `start_date`. Also `natal_chart`, or `dob` + `tob` + `location`. `days` defaults to 30 and `time` defaults to `09:00`. |
 | jyotish-compatibility | `get_compatibility_json` | `male_chart` and `female_chart`, or birth fields for each person. |
 | jyotish-ashtakavarga | `get_ashtakavarga_json` | `natal_chart`, or `dob` + `tob` + `location`. `target_date` is optional. |
+| jyotish-saturn | `get_saturn_cycles` | `as_of_date`. Also `natal_chart`, or `dob` + `tob` + `location`. `as_of_time` defaults to `09:00`. |
 
 Health checks for the MCP processes are `GET http://127.0.0.1:8742/health` through `GET http://127.0.0.1:8746/health`. Those routes are not MCP tools.

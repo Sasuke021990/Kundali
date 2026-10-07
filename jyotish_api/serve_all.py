@@ -23,6 +23,7 @@ COMMANDS = (
     [sys.executable, "-m", "mcp_servers.forecast_server"],
     [sys.executable, "-m", "mcp_servers.compatibility_server"],
     [sys.executable, "-m", "mcp_servers.ashtakavarga_server"],
+    [sys.executable, "-m", "mcp_servers.saturn_server"],
 )
 
 

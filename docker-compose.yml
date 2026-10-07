@@ -132,3 +132,26 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  mcp-saturn:
+    image: jyotish-telemetry
+    command: python -m mcp_servers.saturn_server
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8747"
+    ports:
+      - "8747:8747"
+    depends_on:
+      - api
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8747/health')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
