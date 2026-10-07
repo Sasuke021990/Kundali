@@ -140,7 +140,9 @@ print(get_saturn_cycles(natal, "2026-10-07", "09:00")["sade_sati"]["next_ingress
 
 `get_daily_panchanga` takes the observer's latitude, longitude, and elevation. Sunrise and sunset come from Swiss Ephemeris `rise_trans` at that point, with refraction estimated from the height. Tithi, nakshatra, yoga, and karana are Lahiri positions at sunrise. The weekday is the weekday of sunrise.
 
-Rahu Kaalam, Yamaganda, and Gulika Kaalam are eighths of that sunrise-to-sunset arc. A clock time such as 13:30–15:00 is only the Thursday Rahu window of a 06:00–18:00 day. Pass the place where the action happens. North and South India do not share those clock times.
+Rahu Kaalam, Yamaganda, and Gulika Kaalam are eighths of that sunrise-to-sunset arc and stop at sunset. A clock time such as 13:30–15:00 is only the Thursday Rahu window of a 06:00–18:00 day. Pass the place where the action happens.
+
+`attributes` are the sunrise limbs. `at_time` adds `instant` tithi and karana at that clock. 03:30 on a Friday civil date is still Thursday when sunrise is later that morning.
 
 ```python
 from panchanga import get_daily_panchanga

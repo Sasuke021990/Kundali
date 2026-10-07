@@ -14,8 +14,11 @@ server = MCPServer(
     title="Jyotish Panchanga",
     instructions=(
         "Return the sunrise panchanga and the Rahu, Yamaganda, and Gulika windows "
-        "for the observer's location. Sunrise is topocentric, from latitude, "
-        "longitude, and elevation. Do not replace those windows with a fixed clock."
+        "for the observer's location. Sunrise is the apparent upper limb. The "
+        "windows are eighths of sunset minus sunrise and end at sunset. A time "
+        "before sunrise belongs to the previous solar day. When at_time is set, "
+        "use instant.tithi and instant.karana for that clock, and attributes for "
+        "the sunrise limbs."
     ),
 )
 add_health(server, "jyotish-panchanga")

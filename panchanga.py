@@ -12,6 +12,7 @@ import json
 import math
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import swisseph as swe
@@ -154,6 +155,15 @@ def _sun_event(
     latitude: float,
     elevation: float,
 ) -> datetime:
+    """Apparent upper limb, with refraction estimated from elevation.
+
+    ``CALC_RISE`` and ``CALC_SET`` alone are the traditional Indian sunrise:
+    first sighting of the upper limb at an apparent zenith of about 90° 50'.
+    Disc-center and Hindu-rising flags move that instant by 2–3 minutes and
+    are not used.
+    """
+    if rsmi not in (swe.CALC_RISE, swe.CALC_SET):
+        raise ValueError("Sun events must be apparent rise or set of the upper limb.")
     flags = swe.FLG_MOSEPH | swe.FLG_TOPOCTR
     swe.set_topo(longitude, latitude, elevation)
     code, result = swe.rise_trans(
@@ -209,14 +219,94 @@ def _tithi_name(index: int) -> tuple[str, bool]:
     return f"{paksha} {TITHI_NAMES[number - 1]}", number in RIKTA_IN_PAKSHA
 
 
-def _clock(moment: datetime, zone: ZoneInfo) -> str:
-    return moment.astimezone(zone).strftime("%H:%M:%S")
+def _nearest_second(moment: datetime, zone: ZoneInfo) -> datetime:
+    local = moment.astimezone(zone).replace(tzinfo=None)
+    rounded = local.replace(microsecond=0)
+    if local.microsecond >= 500_000:
+        rounded += timedelta(seconds=1)
+    return rounded.replace(tzinfo=zone)
 
 
-def _window(sunrise: datetime, eighth: timedelta, part: int, zone: ZoneInfo) -> dict[str, str]:
-    start = sunrise + eighth * (part - 1)
-    end = start + eighth
-    return {"start": _clock(start, zone), "end": _clock(end, zone)}
+def _iso(moment: datetime) -> str:
+    if moment.microsecond:
+        return moment.isoformat(timespec="milliseconds")
+    return moment.isoformat(timespec="seconds")
+
+
+def _seconds_after(origin: datetime, moment: datetime) -> int:
+    return int((moment - origin).total_seconds())
+
+
+def _clock_from_seconds(seconds: Decimal) -> str:
+    quantized = seconds.quantize(Decimal("0.01"))
+    whole = int(quantized.to_integral_value(rounding="ROUND_FLOOR"))
+    centi = int((quantized - Decimal(whole)) * 100)
+    hours, remainder = divmod(whole, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours % 24:02d}:{minutes:02d}:{secs:02d}.{centi:02d}"
+
+
+def _moment_from_seconds(origin: datetime, seconds: Decimal, zone: ZoneInfo) -> datetime:
+    quantized = seconds.quantize(Decimal("0.01"))
+    whole = int(quantized.to_integral_value(rounding="ROUND_FLOOR"))
+    micros = int((quantized - Decimal(whole)) * 1_000_000)
+    return (origin + timedelta(seconds=whole, microseconds=micros)).astimezone(zone)
+
+
+def _window(
+    origin: datetime,
+    sunrise_seconds: int,
+    day_seconds: int,
+    part: int,
+    zone: ZoneInfo,
+) -> dict[str, str]:
+    """One eighth of the daytime arc. The end is never later than sunset."""
+    eighth = Decimal(day_seconds) / Decimal(8)
+    sunset_seconds = Decimal(sunrise_seconds + day_seconds)
+    start_seconds = Decimal(sunrise_seconds) + eighth * (part - 1)
+    end_seconds = start_seconds + eighth
+    if end_seconds > sunset_seconds:
+        end_seconds = sunset_seconds
+    start = _moment_from_seconds(origin, start_seconds, zone)
+    end = _moment_from_seconds(origin, end_seconds, zone)
+    return {
+        "start": _clock_from_seconds(start_seconds),
+        "end": _clock_from_seconds(end_seconds),
+        "start_local": _iso(start),
+        "end_local": _iso(end),
+    }
+
+
+def _limbs(
+    moment: datetime,
+    longitude: float,
+    latitude: float,
+    elevation: float,
+) -> dict[str, object]:
+    from kundli import NAKSHATRAS, NAKSHATRA_SPAN
+
+    sun_lon, moon_lon = _sidereal_pair(moment, longitude, latitude, elevation)
+    elongation = (moon_lon - sun_lon) % 360.0
+    tithi_index = _slot(elongation, 12.0, 30)
+    tithi_name, is_rikta = _tithi_name(tithi_index)
+    yoga_index = _slot(sun_lon + moon_lon, 360.0 / 27.0, 27)
+    karana_index = _slot(elongation, 6.0, 60)
+    karana_name = _karana_name(karana_index)
+    nakshatra_index = _slot(moon_lon, NAKSHATRA_SPAN, 27)
+    return {
+        "tithi": {"name": tithi_name, "index": tithi_index, "is_rikta": is_rikta},
+        "nakshatra": {"name": NAKSHATRAS[nakshatra_index - 1][0], "index": nakshatra_index},
+        "yoga": {
+            "name": YOGA_NAMES[yoga_index - 1],
+            "index": yoga_index,
+            "is_malefic": yoga_index in MALEFIC_YOGAS,
+        },
+        "karana": {
+            "name": karana_name,
+            "index": karana_index,
+            "is_bhadra": karana_name == "Vishti",
+        },
+    }
 
 
 def _resolve_place(
@@ -276,6 +366,29 @@ def _resolve_place(
     }
 
 
+def _rise_on(
+    civil: datetime,
+    zone: ZoneInfo,
+    longitude: float,
+    latitude: float,
+    height: float,
+) -> datetime:
+    midnight = civil.replace(tzinfo=zone)
+    sunrise = _sun_event(
+        midnight - timedelta(minutes=1),
+        swe.CALC_RISE,
+        longitude,
+        latitude,
+        height,
+    ).astimezone(zone)
+    if sunrise.date() != civil.date():
+        raise ValueError(
+            f"No topocentric sunrise on {civil.date().isoformat()} at "
+            f"latitude {latitude}, longitude {longitude}."
+        )
+    return sunrise
+
+
 def get_daily_panchanga(
     date: str,
     location: str | None = None,
@@ -285,14 +398,15 @@ def get_daily_panchanga(
     elevation_m: float | None = None,
     timezone_name: str | None = None,
     natal_chart: dict[str, object] | None = None,
-    _solar_date_locked: bool = False,
 ) -> dict[str, object]:
-    """Panchanga at local sunrise, plus Rahu, Yamaganda, and Gulika.
+    """Sunrise panchanga, plus Rahu, Yamaganda, and Gulika on the daytime arc.
 
-    ``date`` is the civil date YYYY-MM-DD in the observer's timezone. A clock
-    time before that morning's sunrise belongs to the previous solar day.
-    Limbs are Lahiri and topocentric at sunrise. The three windows divide the
-    topocentric sunrise-to-sunset arc into eight equal parts.
+    ``date`` is a civil date YYYY-MM-DD. A clock time before that morning's
+    sunrise still belongs to the previous solar day: 03:30 on Friday is
+    Thursday until the Sun rises. ``attributes`` are the Lahiri limbs at
+    sunrise. When ``at_time`` is set, ``instant`` repeats tithi and karana at
+    that clock time. The three windows are eight equal parts of sunset minus
+    sunrise and stop at sunset.
     """
     place = _resolve_place(location, latitude, longitude, elevation_m, timezone_name, natal_chart)
     zone = ZoneInfo(str(place["timezone"]))
@@ -300,91 +414,73 @@ def get_daily_panchanga(
         civil = datetime.strptime(date, "%Y-%m-%d")
     except ValueError as exc:
         raise ValueError(f"Panchanga date must be YYYY-MM-DD, got '{date}'.") from exc
-    midnight = civil.replace(tzinfo=zone)
     latitude_f = float(place["latitude"])
     longitude_f = float(place["longitude"])
     height = float(place["elevation_m"])
-    sunrise = _sun_event(
-        midnight - timedelta(minutes=1),
-        swe.CALC_RISE,
-        longitude_f,
-        latitude_f,
-        height,
-    )
-    if sunrise.astimezone(zone).date() != civil.date():
-        raise ValueError(
-            f"No topocentric sunrise on {date} at latitude {latitude_f}, longitude {longitude_f}."
-        )
-    if at_time and not _solar_date_locked:
+    moment: datetime | None = None
+    if at_time:
         try:
             clock = datetime.strptime(at_time, "%H:%M")
         except ValueError as exc:
             raise ValueError("Panchanga time must be HH:MM.") from exc
-        probe = civil.replace(hour=clock.hour, minute=clock.minute, tzinfo=zone)
-        if probe < sunrise.astimezone(zone):
-            previous = (civil.date() - timedelta(days=1)).isoformat()
-            return get_daily_panchanga(
-                previous,
-                latitude=latitude_f,
-                longitude=longitude_f,
-                elevation_m=height,
-                timezone_name=str(place["timezone"]),
-                _solar_date_locked=True,
-            )
+        moment = civil.replace(hour=clock.hour, minute=clock.minute, tzinfo=zone)
+    sunrise = _rise_on(civil, zone, longitude_f, latitude_f, height)
+    if moment is not None and moment < sunrise:
+        civil = civil - timedelta(days=1)
+        sunrise = _rise_on(civil, zone, longitude_f, latitude_f, height)
     sunset = _sun_event(
         sunrise + timedelta(seconds=1),
         swe.CALC_SET,
         longitude_f,
         latitude_f,
         height,
-    )
+    ).astimezone(zone)
     if sunset <= sunrise:
-        raise ValueError(f"Sunset on {date} is not after sunrise.")
-    eighth = (sunset - sunrise) / 8
+        raise ValueError(f"Sunset on {civil.date().isoformat()} is not after sunrise.")
+    next_sunrise = _sun_event(
+        sunset + timedelta(seconds=1),
+        swe.CALC_RISE,
+        longitude_f,
+        latitude_f,
+        height,
+    ).astimezone(zone)
+    sunrise = _nearest_second(sunrise, zone)
+    sunset = _nearest_second(sunset, zone)
+    next_sunrise = _nearest_second(next_sunrise, zone)
+    origin = sunrise.replace(hour=0, minute=0, second=0, microsecond=0)
+    sunrise_seconds = _seconds_after(origin, sunrise)
+    day_seconds = _seconds_after(sunrise, sunset)
+    if day_seconds <= 0:
+        raise ValueError(f"Sunset on {civil.date().isoformat()} is not after sunrise.")
     # Python weekday is Monday = 0. The vara table is Sunday = 0.
-    vara_index = (sunrise.astimezone(zone).weekday() + 1) % 7
+    vara_index = (sunrise.weekday() + 1) % 7
     lord, vara_name = VARA_LORDS[vara_index]
-    sun_lon, moon_lon = _sidereal_pair(sunrise, longitude_f, latitude_f, height)
-    elongation = (moon_lon - sun_lon) % 360.0
-    tithi_index = _slot(elongation, 12.0, 30)
-    tithi_name, is_rikta = _tithi_name(tithi_index)
-    yoga_index = _slot(sun_lon + moon_lon, 360.0 / 27.0, 27)
-    karana_index = _slot(elongation, 6.0, 60)
-    karana_name = _karana_name(karana_index)
-    from kundli import NAKSHATRAS, NAKSHATRA_SPAN
-
-    nakshatra_index = _slot(moon_lon, NAKSHATRA_SPAN, 27)
-    sunrise_local = sunrise.astimezone(zone)
-    sunset_local = sunset.astimezone(zone)
-    return {
-        "place": place,
-        "daily_panchanga": {
-            "solar_day": {
-                "sunrise": sunrise_local.isoformat(timespec="seconds"),
-                "sunset": sunset_local.isoformat(timespec="seconds"),
-                "day_lord": f"{lord} ({vara_name})",
-            },
-            "attributes": {
-                "tithi": {"name": tithi_name, "index": tithi_index, "is_rikta": is_rikta},
-                "nakshatra": {
-                    "name": NAKSHATRAS[nakshatra_index - 1][0],
-                    "index": nakshatra_index,
-                },
-                "yoga": {
-                    "name": YOGA_NAMES[yoga_index - 1],
-                    "index": yoga_index,
-                    "is_malefic": yoga_index in MALEFIC_YOGAS,
-                },
-                "karana": {
-                    "name": karana_name,
-                    "index": karana_index,
-                    "is_bhadra": karana_name == "Vishti",
-                },
-            },
-            "inauspicious_windows": {
-                "rahu_kaalam": _window(sunrise_local, eighth, RAHU_PART[vara_index], zone),
-                "yamaganda": _window(sunrise_local, eighth, YAMAGANDA_PART[vara_index], zone),
-                "gulika_kaalam": _window(sunrise_local, eighth, GULIKA_PART[vara_index], zone),
-            },
-        },
+    attributes = _limbs(sunrise, longitude_f, latitude_f, height)
+    windows = {
+        "rahu_kaalam": _window(origin, sunrise_seconds, day_seconds, RAHU_PART[vara_index], zone),
+        "yamaganda": _window(
+            origin, sunrise_seconds, day_seconds, YAMAGANDA_PART[vara_index], zone
+        ),
+        "gulika_kaalam": _window(
+            origin, sunrise_seconds, day_seconds, GULIKA_PART[vara_index], zone
+        ),
     }
+    payload: dict[str, object] = {
+        "solar_day": {
+            "sunrise": _iso(sunrise),
+            "sunset": _iso(sunset),
+            "vara_until": _iso(next_sunrise),
+            "day_lord": f"{lord} ({vara_name})",
+        },
+        "attributes": attributes,
+        "inauspicious_windows": windows,
+    }
+    if moment is not None:
+        instant_limbs = _limbs(moment, longitude_f, latitude_f, height)
+        payload["instant"] = {
+            "local": _iso(moment),
+            "within_daytime_arc": sunrise <= moment < sunset,
+            "tithi": instant_limbs["tithi"],
+            "karana": instant_limbs["karana"],
+        }
+    return {"place": place, "daily_panchanga": payload}
