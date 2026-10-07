@@ -7,6 +7,7 @@ from typing import Any
 from kundli import (
     _load_natal_chart,
     generate_forecast_window,
+    get_compatibility_json,
     get_kundli_json,
     get_timing_telemetry,
 )
@@ -64,3 +65,22 @@ def build_forecast(
     """Concise multi-day timeline of dasha, Tara, and risk flags."""
     chart = resolve_natal_chart(natal_chart, dob, tob, location)
     return generate_forecast_window(chart, start_date, days, time_str)
+
+
+def build_compatibility(
+    male_chart: dict[str, Any] | str | None = None,
+    female_chart: dict[str, Any] | str | None = None,
+    male_dob: str | None = None,
+    male_tob: str | None = None,
+    male_location: str | None = None,
+    female_dob: str | None = None,
+    female_tob: str | None = None,
+    female_location: str | None = None,
+) -> dict[str, Any]:
+    """Ashtakoota, Manglik, and 7th-house synastry. Groom and bride stay distinct."""
+    male = resolve_natal_chart(male_chart, male_dob, male_tob, male_location)
+    female = resolve_natal_chart(female_chart, female_dob, female_tob, female_location)
+    result = get_compatibility_json(male, female, as_string=False)
+    if not isinstance(result, dict):
+        raise ValueError("Compatibility calculation did not return an object.")
+    return result

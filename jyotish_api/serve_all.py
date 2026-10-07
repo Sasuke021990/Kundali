@@ -1,4 +1,4 @@
-"""Run the HTTP API and the three MCP servers in one container."""
+"""Run the HTTP API and the four MCP servers in one container."""
 
 from __future__ import annotations
 
@@ -8,10 +8,20 @@ import subprocess
 import sys
 
 COMMANDS = (
-    [sys.executable, "-m", "uvicorn", "jyotish_api.main:app", "--host", "0.0.0.0", "--port", "8741"],
+    [
+        sys.executable,
+        "-m",
+        "uvicorn",
+        "jyotish_api.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8741",
+    ],
     [sys.executable, "-m", "mcp_servers.kundli_server"],
     [sys.executable, "-m", "mcp_servers.timing_server"],
     [sys.executable, "-m", "mcp_servers.forecast_server"],
+    [sys.executable, "-m", "mcp_servers.compatibility_server"],
 )
 
 

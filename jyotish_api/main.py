@@ -1,8 +1,9 @@
-"""Three HTTP APIs, each with its own Swagger UI.
+"""Four HTTP APIs, each with its own Swagger UI.
 
-Kundli:    /kundli/docs
-Timing:    /timing/docs
-Forecast:  /forecast/docs
+Kundli:         /kundli/docs
+Timing:         /timing/docs
+Forecast:       /forecast/docs
+Compatibility:  /compatibility/docs
 """
 
 from __future__ import annotations
@@ -15,12 +16,13 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from jyotish_api.service import build_forecast, build_kundli, build_timing
+from jyotish_api.service import build_compatibility, build_forecast, build_kundli, build_timing
 
 API_PORT = 8741
 KUNDLI_MCP_PORT = 8742
 TIMING_MCP_PORT = 8743
 FORECAST_MCP_PORT = 8744
+COMPATIBILITY_MCP_PORT = 8745
 
 
 class BirthBody(BaseModel):
@@ -63,6 +65,23 @@ class ForecastBody(BaseModel):
     dob: str | None = Field(None, examples=["1998-04-10"])
     tob: str | None = Field(None, examples=["17:25"])
     location: str | None = Field(None, examples=["Hubli, Karnataka"])
+
+
+class CompatibilityBody(BaseModel):
+    male_chart: dict[str, Any] | None = Field(
+        None,
+        description="Groom chart from the Kundli API, or omit and send the male birth fields.",
+    )
+    female_chart: dict[str, Any] | None = Field(
+        None,
+        description="Bride chart from the Kundli API, or omit and send the female birth fields.",
+    )
+    male_dob: str | None = Field(None, examples=["1998-04-10"])
+    male_tob: str | None = Field(None, examples=["17:25"])
+    male_location: str | None = Field(None, examples=["Hubli, Karnataka"])
+    female_dob: str | None = Field(None, examples=["1990-04-02"])
+    female_tob: str | None = Field(None, examples=["06:30"])
+    female_location: str | None = Field(None, examples=["Gadag, Karnataka"])
 
 
 def _failure(exc: ValueError) -> HTTPException:
@@ -131,9 +150,22 @@ For a month outlook, keep `critical_windows` and `major_transits`. For one day,
 take that single `timeline` row and call the Timing API for the degrees.
 """.strip()
 
+COMPATIBILITY_DESCRIPTION = """
+36-guna Ashtakoota Milan for one groom and one bride, plus Manglik dosha from
+both the lagna and the Moon, and 7th-house synastry.
+
+Send `male_chart` and `female_chart` from the Kundli API, or send birth fields
+for each person. Varna and Gana are not symmetric, so do not swap the two people.
+A score of 30/36 is not enough when Nadi dosha is active or only one chart has
+an uncancelled Manglik dosha.
+""".strip()
+
 kundli_api = _documented_app("Kundli API", KUNDLI_DESCRIPTION, "/kundli")
 timing_api = _documented_app("Timing API", TIMING_DESCRIPTION, "/timing")
 forecast_api = _documented_app("Forecast API", FORECAST_DESCRIPTION, "/forecast")
+compatibility_api = _documented_app(
+    "Compatibility API", COMPATIBILITY_DESCRIPTION, "/compatibility"
+)
 
 
 @kundli_api.post(
@@ -187,6 +219,27 @@ def forecast_window(body: ForecastBody) -> dict[str, Any]:
         raise _failure(exc) from exc
 
 
+@compatibility_api.post(
+    "/match",
+    summary="Ashtakoota, Manglik, and 7th-house synastry",
+    response_description="Guna breakdown, Manglik analysis, dosha flags, and 7th-house synastry.",
+)
+def compatibility_match(body: CompatibilityBody) -> dict[str, Any]:
+    try:
+        return build_compatibility(
+            body.male_chart,
+            body.female_chart,
+            body.male_dob,
+            body.male_tob,
+            body.male_location,
+            body.female_dob,
+            body.female_tob,
+            body.female_location,
+        )
+    except ValueError as exc:
+        raise _failure(exc) from exc
+
+
 def connection_card(host: str = "127.0.0.1") -> dict[str, Any]:
     """URLs a browser or an MCP client uses on this machine."""
     return {
@@ -194,16 +247,19 @@ def connection_card(host: str = "127.0.0.1") -> dict[str, Any]:
             "kundli": f"http://{host}:{API_PORT}/kundli/docs",
             "timing": f"http://{host}:{API_PORT}/timing/docs",
             "forecast": f"http://{host}:{API_PORT}/forecast/docs",
+            "compatibility": f"http://{host}:{API_PORT}/compatibility/docs",
         },
         "openapi": {
             "kundli": f"http://{host}:{API_PORT}/kundli/openapi.json",
             "timing": f"http://{host}:{API_PORT}/timing/openapi.json",
             "forecast": f"http://{host}:{API_PORT}/forecast/openapi.json",
+            "compatibility": f"http://{host}:{API_PORT}/compatibility/openapi.json",
         },
         "mcp": {
             "kundli": f"http://{host}:{KUNDLI_MCP_PORT}/mcp",
             "timing": f"http://{host}:{TIMING_MCP_PORT}/mcp",
             "forecast": f"http://{host}:{FORECAST_MCP_PORT}/mcp",
+            "compatibility": f"http://{host}:{COMPATIBILITY_MCP_PORT}/mcp",
         },
     }
 
@@ -221,7 +277,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-for mounted in (kundli_api, timing_api, forecast_api):
+for mounted in (kundli_api, timing_api, forecast_api, compatibility_api):
     mounted.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -232,6 +288,7 @@ for mounted in (kundli_api, timing_api, forecast_api):
 app.mount("/kundli", kundli_api)
 app.mount("/timing", timing_api)
 app.mount("/forecast", forecast_api)
+app.mount("/compatibility", compatibility_api)
 
 
 @app.get("/health", include_in_schema=False)
@@ -247,7 +304,12 @@ def connections() -> dict[str, Any]:
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def home() -> str:
     card = connection_card()
-    labels = {"kundli": "Kundli", "timing": "Timing", "forecast": "Forecast"}
+    labels = {
+        "kundli": "Kundli",
+        "timing": "Timing",
+        "forecast": "Forecast",
+        "compatibility": "Compatibility",
+    }
     rows = []
     for name, url in card["swagger"].items():
         rows.append(f"<li><a href=\"{url}\">{labels[name]} Swagger</a></li>")
@@ -266,7 +328,7 @@ def home() -> str:
 </head>
 <body>
   <h1>Jyotish telemetry</h1>
-  <p>Three HTTP APIs over the natal chart, the timing calculation, and the forecast window.</p>
+  <p>Four HTTP APIs: natal chart, timing, forecast window, and compatibility.</p>
   <ul>
     {''.join(rows)}
   </ul>

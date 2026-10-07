@@ -99,17 +99,30 @@ path = generate_kundli_chart(
 
 Geocoding needs network access to OpenStreetMap Nominatim. The program does not substitute coordinates or UTC when lookup fails.
 
+## Compatibility
+
+`get_compatibility_json` takes two charts from `get_kundli_json`. It scores the 36-guna Ashtakoota, Manglik dosha from both lagna and Moon, and 7th-house synastry. Varna and Gana use the groom as `male_chart` and the bride as `female_chart`. Swapping them can change the score.
+
+```python
+from kundli import get_compatibility_json, get_kundli_json
+
+groom = get_kundli_json("1998-04-10", "17:25", "Hubli, Karnataka")
+bride = get_kundli_json("1990-04-02", "06:30", "Gadag, Karnataka")
+print(get_compatibility_json(groom, bride, as_string=True))
+```
+
 ## HTTP APIs and MCP servers
 
-Three HTTP APIs and three MCP servers call the same functions. One Docker image runs all of them.
+Four HTTP APIs and four MCP servers call the same functions. One Docker image runs all of them.
 
 | Service | What it calls | Swagger | MCP endpoint |
 | --- | --- | --- | --- |
 | Kundli | `get_kundli_json` | http://127.0.0.1:8741/kundli/docs | http://127.0.0.1:8742/mcp |
 | Timing | `get_timing_telemetry` | http://127.0.0.1:8741/timing/docs | http://127.0.0.1:8743/mcp |
 | Forecast | `generate_forecast_window` | http://127.0.0.1:8741/forecast/docs | http://127.0.0.1:8744/mcp |
+| Compatibility | `get_compatibility_json` | http://127.0.0.1:8741/compatibility/docs | http://127.0.0.1:8745/mcp |
 
-OpenAPI documents, without the Swagger UI, are at `/kundli/openapi.json`, `/timing/openapi.json`, and `/forecast/openapi.json` on port 8741. ReDoc for each API is the same path with `/redoc` instead of `/docs`. A short index of these URLs is at http://127.0.0.1:8741/ and the same data as JSON is at http://127.0.0.1:8741/connections.
+OpenAPI documents are at `/kundli/openapi.json`, `/timing/openapi.json`, `/forecast/openapi.json`, and `/compatibility/openapi.json` on port 8741. ReDoc for each API is the same path with `/redoc` instead of `/docs`. A short index is at http://127.0.0.1:8741/ and the same data as JSON is at http://127.0.0.1:8741/connections.
 
 ### Run with Docker
 
@@ -117,13 +130,13 @@ OpenAPI documents, without the Swagger UI, are at `/kundli/openapi.json`, `/timi
 docker compose up --build
 ```
 
-The API container listens on 8741. The Kundli, Timing, and Forecast MCP containers listen on 8742, 8743, and 8744. Each container has a `GET /health` check. The chart calls need outbound access to OpenStreetMap Nominatim.
+The API container listens on 8741. The Kundli, Timing, Forecast, and Compatibility MCP containers listen on 8742, 8743, 8744, and 8745. Each container has a `GET /health` check. The chart calls need outbound access to OpenStreetMap Nominatim.
 
 One container can run every process instead of Compose:
 
 ```bash
 docker build -t jyotish-telemetry .
-docker run --rm -p 8741:8741 -p 8742:8742 -p 8743:8743 -p 8744:8744 jyotish-telemetry
+docker run --rm -p 8741:8741 -p 8742:8742 -p 8743:8743 -p 8744:8744 -p 8745:8745 jyotish-telemetry
 ```
 
 ### Run without Docker
@@ -135,6 +148,7 @@ uvicorn jyotish_api.main:app --host 0.0.0.0 --port 8741
 MCP_PORT=8742 python -m mcp_servers.kundli_server
 MCP_PORT=8743 python -m mcp_servers.timing_server
 MCP_PORT=8744 python -m mcp_servers.forecast_server
+MCP_PORT=8745 python -m mcp_servers.compatibility_server
 ```
 
 Start each process in its own terminal. `MCP_HOST` defaults to `0.0.0.0`.
@@ -176,6 +190,19 @@ Forecast, `POST /forecast/window`:
 }
 ```
 
+Compatibility, `POST /compatibility/match`. The groom is the male chart and the bride is the female chart:
+
+```json
+{
+  "male_dob": "1998-04-10",
+  "male_tob": "17:25",
+  "male_location": "Hubli, Karnataka",
+  "female_dob": "1990-04-02",
+  "female_tob": "06:30",
+  "female_location": "Gadag, Karnataka"
+}
+```
+
 A bad date, an unknown place, or a daylight-saving gap returns HTTP 400 with the validation message in `detail`.
 
 For a month outlook, send a model the natal chart, `critical_windows`, and `major_transits`. For one day, send that `timeline` row plus the Timing API degrees. Treat `dasha_transition: true` as the day the period changes.
@@ -198,6 +225,10 @@ The servers speak streamable HTTP at `/mcp` and answer JSON. In Cursor, add this
     "jyotish-forecast": {
       "type": "http",
       "url": "http://127.0.0.1:8744/mcp"
+    },
+    "jyotish-compatibility": {
+      "type": "http",
+      "url": "http://127.0.0.1:8745/mcp"
     }
   }
 }
@@ -208,5 +239,6 @@ The servers speak streamable HTTP at `/mcp` and answer JSON. In Cursor, add this
 | jyotish-kundli | `get_kundli_json` | `dob`, `tob`, `location` |
 | jyotish-timing | `get_timing_telemetry` | `target_date`. Also `natal_chart`, or `dob` + `tob` + `location`. `target_time` defaults to `12:00`. |
 | jyotish-forecast | `generate_forecast_window` | `start_date`. Also `natal_chart`, or `dob` + `tob` + `location`. `days` defaults to 30 and `time` defaults to `09:00`. |
+| jyotish-compatibility | `get_compatibility_json` | `male_chart` and `female_chart`, or birth fields for each person. |
 
-Health checks for the MCP processes are `GET http://127.0.0.1:8742/health`, `GET http://127.0.0.1:8743/health`, and `GET http://127.0.0.1:8744/health`. Those routes are not MCP tools.
+Health checks for the MCP processes are `GET http://127.0.0.1:8742/health`, `GET http://127.0.0.1:8743/health`, `GET http://127.0.0.1:8744/health`, and `GET http://127.0.0.1:8745/health`. Those routes are not MCP tools.

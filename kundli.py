@@ -2583,6 +2583,9 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     return args
 
 
+from compatibility import get_compatibility_json
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point. With no arguments, render the built-in example chart."""
     if argv is None:
