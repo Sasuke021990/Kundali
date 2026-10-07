@@ -237,15 +237,6 @@ def _seconds_after(origin: datetime, moment: datetime) -> int:
     return int((moment - origin).total_seconds())
 
 
-def _clock_from_seconds(seconds: Decimal) -> str:
-    quantized = seconds.quantize(Decimal("0.01"))
-    whole = int(quantized.to_integral_value(rounding="ROUND_FLOOR"))
-    centi = int((quantized - Decimal(whole)) * 100)
-    hours, remainder = divmod(whole, 3600)
-    minutes, secs = divmod(remainder, 60)
-    return f"{hours % 24:02d}:{minutes:02d}:{secs:02d}.{centi:02d}"
-
-
 def _moment_from_seconds(origin: datetime, seconds: Decimal, zone: ZoneInfo) -> datetime:
     quantized = seconds.quantize(Decimal("0.01"))
     whole = int(quantized.to_integral_value(rounding="ROUND_FLOOR"))
@@ -253,13 +244,13 @@ def _moment_from_seconds(origin: datetime, seconds: Decimal, zone: ZoneInfo) -> 
     return (origin + timedelta(seconds=whole, microseconds=micros)).astimezone(zone)
 
 
-def _window(
+def _window_bounds(
     origin: datetime,
     sunrise_seconds: int,
     day_seconds: int,
     part: int,
     zone: ZoneInfo,
-) -> dict[str, str]:
+) -> tuple[datetime, datetime]:
     """One eighth of the daytime arc. The end is never later than sunset."""
     eighth = Decimal(day_seconds) / Decimal(8)
     sunset_seconds = Decimal(sunrise_seconds + day_seconds)
@@ -269,12 +260,11 @@ def _window(
         end_seconds = sunset_seconds
     start = _moment_from_seconds(origin, start_seconds, zone)
     end = _moment_from_seconds(origin, end_seconds, zone)
-    return {
-        "start": _clock_from_seconds(start_seconds),
-        "end": _clock_from_seconds(end_seconds),
-        "start_local": _iso(start),
-        "end_local": _iso(end),
-    }
+    return start, end
+
+
+def _window_payload(start: datetime, end: datetime) -> dict[str, str]:
+    return {"start": _iso(start), "end": _iso(end)}
 
 
 def _limbs(
@@ -405,8 +395,8 @@ def get_daily_panchanga(
     sunrise still belongs to the previous solar day: 03:30 on Friday is
     Thursday until the Sun rises. ``attributes`` are the Lahiri limbs at
     sunrise. When ``at_time`` is set, ``instant`` repeats tithi and karana at
-    that clock time. The three windows are eight equal parts of sunset minus
-    sunrise and stop at sunset.
+    that clock time and names the daytime window that contains it. The three
+    windows are eight equal parts of sunset minus sunrise and stop at sunset.
     """
     place = _resolve_place(location, latitude, longitude, elevation_m, timezone_name, natal_chart)
     zone = ZoneInfo(str(place["timezone"]))
@@ -419,11 +409,21 @@ def get_daily_panchanga(
     height = float(place["elevation_m"])
     moment: datetime | None = None
     if at_time:
-        try:
-            clock = datetime.strptime(at_time, "%H:%M")
-        except ValueError as exc:
-            raise ValueError("Panchanga time must be HH:MM.") from exc
-        moment = civil.replace(hour=clock.hour, minute=clock.minute, tzinfo=zone)
+        clock: datetime | None = None
+        for pattern in ("%H:%M:%S", "%H:%M"):
+            try:
+                clock = datetime.strptime(at_time, pattern)
+            except ValueError:
+                continue
+            break
+        if clock is None:
+            raise ValueError("Panchanga time must be HH:MM or HH:MM:SS.")
+        moment = civil.replace(
+            hour=clock.hour,
+            minute=clock.minute,
+            second=clock.second,
+            tzinfo=zone,
+        )
     sunrise = _rise_on(civil, zone, longitude_f, latitude_f, height)
     if moment is not None and moment < sunrise:
         civil = civil - timedelta(days=1)
@@ -456,31 +456,58 @@ def get_daily_panchanga(
     vara_index = (sunrise.weekday() + 1) % 7
     lord, vara_name = VARA_LORDS[vara_index]
     attributes = _limbs(sunrise, longitude_f, latitude_f, height)
-    windows = {
-        "rahu_kaalam": _window(origin, sunrise_seconds, day_seconds, RAHU_PART[vara_index], zone),
-        "yamaganda": _window(
-            origin, sunrise_seconds, day_seconds, YAMAGANDA_PART[vara_index], zone
-        ),
-        "gulika_kaalam": _window(
-            origin, sunrise_seconds, day_seconds, GULIKA_PART[vara_index], zone
-        ),
+    labeled_parts = (
+        ("Rahu Kaalam", RAHU_PART[vara_index]),
+        ("Yamaganda", YAMAGANDA_PART[vara_index]),
+        ("Gulika Kaalam", GULIKA_PART[vara_index]),
+    )
+    bounds = {
+        label: _window_bounds(origin, sunrise_seconds, day_seconds, part, zone)
+        for label, part in labeled_parts
     }
+    windows = {label: _window_payload(*span) for label, span in bounds.items()}
     payload: dict[str, object] = {
         "solar_day": {
             "sunrise": _iso(sunrise),
+            "sunrise_current": _iso(sunrise),
+            "sunrise_next": _iso(next_sunrise),
             "sunset": _iso(sunset),
-            "vara_until": _iso(next_sunrise),
             "day_lord": f"{lord} ({vara_name})",
         },
         "attributes": attributes,
-        "inauspicious_windows": windows,
+        "inauspicious_windows": {
+            "rahu_kaalam": windows["Rahu Kaalam"],
+            "yamaganda": windows["Yamaganda"],
+            "gulika_kaalam": windows["Gulika Kaalam"],
+        },
     }
     if moment is not None:
         instant_limbs = _limbs(moment, longitude_f, latitude_f, height)
+        in_day = sunrise <= moment < sunset
+        active = None
+        if in_day:
+            for label, (start, end) in bounds.items():
+                if start <= moment < end:
+                    active = label
+                    break
+        tithi = instant_limbs["tithi"]
+        karana = instant_limbs["karana"]
+        yoga = instant_limbs["yoga"]
+        if not in_day:
+            favorable = None
+        else:
+            blocked = active is not None
+            blocked = blocked or bool(tithi["is_rikta"]) or bool(karana["is_bhadra"])
+            blocked = blocked or bool(yoga["is_malefic"])
+            favorable = not blocked
         payload["instant"] = {
             "local": _iso(moment),
-            "within_daytime_arc": sunrise <= moment < sunset,
-            "tithi": instant_limbs["tithi"],
-            "karana": instant_limbs["karana"],
+            "is_current_solar_day": sunrise <= moment < next_sunrise,
+            "within_daytime_arc": in_day,
+            "daytime_kaalam_active": active if in_day else None,
+            "active_inauspicious_window": active,
+            "is_favorable_for_action": favorable,
+            "tithi": tithi,
+            "karana": karana,
         }
     return {"place": place, "daily_panchanga": payload}

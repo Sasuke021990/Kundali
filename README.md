@@ -142,7 +142,7 @@ print(get_saturn_cycles(natal, "2026-10-07", "09:00")["sade_sati"]["next_ingress
 
 Rahu Kaalam, Yamaganda, and Gulika Kaalam are eighths of that sunrise-to-sunset arc and stop at sunset. A clock time such as 13:30–15:00 is only the Thursday Rahu window of a 06:00–18:00 day. Pass the place where the action happens.
 
-`attributes` are the sunrise limbs. `at_time` adds `instant` tithi and karana at that clock. 03:30 on a Friday civil date is still Thursday when sunrise is later that morning.
+`solar_day.sunrise_current` and `solar_day.sunrise_next` are full ISO-8601 timestamps. `instant.is_current_solar_day` is true when the event falls in that half-open range. `at_time` adds tithi, karana, and `active_inauspicious_window`. Outside the daytime arc, `daytime_kaalam_active` and `is_favorable_for_action` are null.
 
 ```python
 from panchanga import get_daily_panchanga

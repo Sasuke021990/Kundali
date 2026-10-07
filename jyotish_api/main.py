@@ -120,8 +120,8 @@ class PanchangaBody(BaseModel):
         None,
         examples=["09:00"],
         description=(
-            "Local HH:MM. Before sunrise this stays on the previous solar day. "
-            "Instant tithi and karana are scored at this clock."
+            "Local HH:MM or HH:MM:SS. Before sunrise this stays on the previous "
+            "solar day. Instant tithi, karana, and the active window are scored here."
         ),
     )
     location: str | None = Field(
@@ -274,11 +274,13 @@ The daylight arc is sunset minus sunrise, split into eight equal parts.
 Rahu Kaalam, Yamaganda, and Gulika end at sunset. They are not 90-minute
 blocks and they are not applied after sunset.
 
-`attributes` are the limbs at sunrise. Send `at_time` to add `instant.tithi`
-and `instant.karana` at that clock time, for a contract or a birth. A time
-before sunrise still belongs to the previous solar day: 03:30 on Friday is
-Thursday until the Sun rises. Sunrise is the apparent upper limb with
-refraction, not the disc center.
+`attributes` are the limbs at sunrise. `sunrise_current` and `sunrise_next`
+bound the solar day. Send `at_time` as HH:MM or HH:MM:SS to score that clock.
+`instant.is_current_solar_day` is true when sunrise_current <= event < sunrise_next.
+`instant.active_inauspicious_window` names Rahu Kaalam, Yamaganda, or Gulika
+Kaalam. Outside sunrise-to-sunset, `daytime_kaalam_active` and
+`is_favorable_for_action` are null: night is not treated as safe. Every
+timestamp is an ISO-8601 string with the UTC offset.
 
 Send `location` for the place where the action happens, or `latitude`,
 `longitude`, and optional `elevation_m`. A natal chart or birth fields are

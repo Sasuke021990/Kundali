@@ -15,10 +15,11 @@ server = MCPServer(
     instructions=(
         "Return the sunrise panchanga and the Rahu, Yamaganda, and Gulika windows "
         "for the observer's location. Sunrise is the apparent upper limb. The "
-        "windows are eighths of sunset minus sunrise and end at sunset. A time "
-        "before sunrise belongs to the previous solar day. When at_time is set, "
-        "use instant.tithi and instant.karana for that clock, and attributes for "
-        "the sunrise limbs."
+        "windows are eighths of sunset minus sunrise and end at sunset. Use "
+        "sunrise_current and sunrise_next for the solar day. When at_time is "
+        "set, read active_inauspicious_window and is_favorable_for_action. A "
+        "null daytime_kaalam_active means the clock is outside the daytime "
+        "arc, not that the moment is safe."
     ),
 )
 add_health(server, "jyotish-panchanga")
