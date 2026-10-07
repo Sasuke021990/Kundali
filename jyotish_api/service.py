@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ashtakavarga import get_ashtakavarga_json
 from kundli import (
     _load_natal_chart,
     generate_forecast_window,
@@ -84,3 +85,22 @@ def build_compatibility(
     if not isinstance(result, dict):
         raise ValueError("Compatibility calculation did not return an object.")
     return result
+
+
+def build_ashtakavarga(
+    natal_chart: dict[str, Any] | str | None = None,
+    dob: str | None = None,
+    tob: str | None = None,
+    location: str | None = None,
+    target_date: str | None = None,
+    target_time: str = "12:00",
+) -> dict[str, Any]:
+    """Natal BAV/SAV, and gochara potency when a target date is given."""
+    chart = resolve_natal_chart(natal_chart, dob, tob, location)
+    transits = None
+    if target_date:
+        timing = get_timing_telemetry(chart, target_date, target_time)
+        transits = timing["transits"]
+        if not isinstance(transits, dict):
+            raise ValueError("Timing telemetry is missing transits.")
+    return get_ashtakavarga_json(chart, transits)

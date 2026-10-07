@@ -1,4 +1,4 @@
-"""Run the HTTP API and the four MCP servers in one container."""
+"""Run the HTTP API and the five MCP servers in one container."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ COMMANDS = (
     [sys.executable, "-m", "mcp_servers.timing_server"],
     [sys.executable, "-m", "mcp_servers.forecast_server"],
     [sys.executable, "-m", "mcp_servers.compatibility_server"],
+    [sys.executable, "-m", "mcp_servers.ashtakavarga_server"],
 )
 
 

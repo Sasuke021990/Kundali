@@ -38,6 +38,9 @@ from matplotlib.font_manager import FontProperties, fontManager
 from matplotlib.text import Text
 from timezonefinder import TimezoneFinder
 
+from ashtakavarga import get_ashtakavarga_json
+from compatibility import get_compatibility_json
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -2043,6 +2046,7 @@ def kundli_as_dict(chart: ChartData) -> dict[str, object]:
         "planets": planets,
         "houses": houses,
     }
+    payload["ashtakavarga"] = get_ashtakavarga_json(payload)
     return payload
 
 
@@ -2333,6 +2337,7 @@ def get_timing_telemetry(
             "house_from_natal_moon": moon_from_natal_moon,
             "is_chandrashtama": moon_from_natal_moon == 8,
         },
+        "ashtakavarga": get_ashtakavarga_json(chart, transits),
     }
 
 
@@ -2410,6 +2415,7 @@ def generate_forecast_window(
     major_at_start: dict[str, object] = {}
     sign_changes: list[dict[str, str]] = []
     previous_signs: dict[str, str] = {}
+    natal_ashtakavarga: object | None = None
 
     for offset in range(days):
         current_date = (start_date + timedelta(days=offset)).isoformat()
@@ -2458,6 +2464,7 @@ def generate_forecast_window(
                 raise ValueError(f"Timing telemetry for {current_date} is missing {name}.")
             sign = str(record["sign"])
             if offset == 0:
+                natal_ashtakavarga = daily.get("ashtakavarga")
                 major_at_start[name] = {
                     "sign": sign,
                     "sign_number": int(record["sign_number"]),
@@ -2511,6 +2518,7 @@ def generate_forecast_window(
             "planets": major_at_start,
             "sign_changes": sign_changes,
         },
+        "ashtakavarga": natal_ashtakavarga,
         "timeline": timeline,
     }
 
@@ -2581,9 +2589,6 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
             '--location "Bengaluru, India"'
         )
     return args
-
-
-from compatibility import get_compatibility_json
 
 
 def main(argv: list[str] | None = None) -> int:

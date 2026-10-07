@@ -1,9 +1,10 @@
-"""Four HTTP APIs, each with its own Swagger UI.
+"""Five HTTP APIs, each with its own Swagger UI.
 
 Kundli:         /kundli/docs
 Timing:         /timing/docs
 Forecast:       /forecast/docs
 Compatibility:  /compatibility/docs
+Ashtakavarga:   /ashtakavarga/docs
 """
 
 from __future__ import annotations
@@ -16,13 +17,20 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from jyotish_api.service import build_compatibility, build_forecast, build_kundli, build_timing
+from jyotish_api.service import (
+    build_ashtakavarga,
+    build_compatibility,
+    build_forecast,
+    build_kundli,
+    build_timing,
+)
 
 API_PORT = 8741
 KUNDLI_MCP_PORT = 8742
 TIMING_MCP_PORT = 8743
 FORECAST_MCP_PORT = 8744
 COMPATIBILITY_MCP_PORT = 8745
+ASHTAKAVARGA_MCP_PORT = 8746
 
 
 class BirthBody(BaseModel):
@@ -82,6 +90,22 @@ class CompatibilityBody(BaseModel):
     female_dob: str | None = Field(None, examples=["1990-04-02"])
     female_tob: str | None = Field(None, examples=["06:30"])
     female_location: str | None = Field(None, examples=["Gadag, Karnataka"])
+
+
+class AshtakavargaBody(BaseModel):
+    natal_chart: dict[str, Any] | None = Field(
+        None,
+        description="Dict from the Kundli API. Omit it to send dob, tob, and location.",
+    )
+    dob: str | None = Field(None, examples=["1998-04-10"])
+    tob: str | None = Field(None, examples=["17:25"])
+    location: str | None = Field(None, examples=["Hubli, Karnataka"])
+    target_date: str | None = Field(
+        None,
+        examples=["2026-10-15"],
+        description="Optional civil date for transit_filter_status.",
+    )
+    target_time: str = Field("12:00", examples=["09:00"])
 
 
 def _failure(exc: ValueError) -> HTTPException:
@@ -160,11 +184,24 @@ A score of 30/36 is not enough when Nadi dosha is active or only one chart has
 an uncancelled Manglik dosha.
 """.strip()
 
+ASHTAKAVARGA_DESCRIPTION = """
+Bhinnashtakavarga (0–8 bindus per sign for each of the seven grahas) and
+Sarvashtakavarga (0–56 per sign, mean 28). A transit in a sign with 32 or more
+SAV bindus is protected even in a hard house. A transit in a sign with 24 or
+fewer bindus is weak even in a good house.
+
+Send a natal chart or birth details. Add `target_date` to score Jupiter, Saturn,
+Rahu, and Ketu against the natal SAV of the signs they occupy.
+""".strip()
+
 kundli_api = _documented_app("Kundli API", KUNDLI_DESCRIPTION, "/kundli")
 timing_api = _documented_app("Timing API", TIMING_DESCRIPTION, "/timing")
 forecast_api = _documented_app("Forecast API", FORECAST_DESCRIPTION, "/forecast")
 compatibility_api = _documented_app(
     "Compatibility API", COMPATIBILITY_DESCRIPTION, "/compatibility"
+)
+ashtakavarga_api = _documented_app(
+    "Ashtakavarga API", ASHTAKAVARGA_DESCRIPTION, "/ashtakavarga"
 )
 
 
@@ -240,6 +277,25 @@ def compatibility_match(body: CompatibilityBody) -> dict[str, Any]:
         raise _failure(exc) from exc
 
 
+@ashtakavarga_api.post(
+    "/bindus",
+    summary="Bhinnashtakavarga, Sarvashtakavarga, and transit potency",
+    response_description="SAV per sign, BAV per graha, and optional transit_filter_status.",
+)
+def ashtakavarga_bindus(body: AshtakavargaBody) -> dict[str, Any]:
+    try:
+        return build_ashtakavarga(
+            body.natal_chart,
+            body.dob,
+            body.tob,
+            body.location,
+            body.target_date,
+            body.target_time,
+        )
+    except ValueError as exc:
+        raise _failure(exc) from exc
+
+
 def connection_card(host: str = "127.0.0.1") -> dict[str, Any]:
     """URLs a browser or an MCP client uses on this machine."""
     return {
@@ -248,18 +304,21 @@ def connection_card(host: str = "127.0.0.1") -> dict[str, Any]:
             "timing": f"http://{host}:{API_PORT}/timing/docs",
             "forecast": f"http://{host}:{API_PORT}/forecast/docs",
             "compatibility": f"http://{host}:{API_PORT}/compatibility/docs",
+            "ashtakavarga": f"http://{host}:{API_PORT}/ashtakavarga/docs",
         },
         "openapi": {
             "kundli": f"http://{host}:{API_PORT}/kundli/openapi.json",
             "timing": f"http://{host}:{API_PORT}/timing/openapi.json",
             "forecast": f"http://{host}:{API_PORT}/forecast/openapi.json",
             "compatibility": f"http://{host}:{API_PORT}/compatibility/openapi.json",
+            "ashtakavarga": f"http://{host}:{API_PORT}/ashtakavarga/openapi.json",
         },
         "mcp": {
             "kundli": f"http://{host}:{KUNDLI_MCP_PORT}/mcp",
             "timing": f"http://{host}:{TIMING_MCP_PORT}/mcp",
             "forecast": f"http://{host}:{FORECAST_MCP_PORT}/mcp",
             "compatibility": f"http://{host}:{COMPATIBILITY_MCP_PORT}/mcp",
+            "ashtakavarga": f"http://{host}:{ASHTAKAVARGA_MCP_PORT}/mcp",
         },
     }
 
@@ -277,7 +336,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-for mounted in (kundli_api, timing_api, forecast_api, compatibility_api):
+for mounted in (
+    kundli_api,
+    timing_api,
+    forecast_api,
+    compatibility_api,
+    ashtakavarga_api,
+):
     mounted.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -289,6 +354,7 @@ app.mount("/kundli", kundli_api)
 app.mount("/timing", timing_api)
 app.mount("/forecast", forecast_api)
 app.mount("/compatibility", compatibility_api)
+app.mount("/ashtakavarga", ashtakavarga_api)
 
 
 @app.get("/health", include_in_schema=False)
@@ -309,6 +375,7 @@ def home() -> str:
         "timing": "Timing",
         "forecast": "Forecast",
         "compatibility": "Compatibility",
+        "ashtakavarga": "Ashtakavarga",
     }
     rows = []
     for name, url in card["swagger"].items():
@@ -328,7 +395,7 @@ def home() -> str:
 </head>
 <body>
   <h1>Jyotish telemetry</h1>
-  <p>Four HTTP APIs: natal chart, timing, forecast window, and compatibility.</p>
+  <p>Five HTTP APIs: natal chart, timing, forecast, compatibility, and Ashtakavarga.</p>
   <ul>
     {''.join(rows)}
   </ul>
