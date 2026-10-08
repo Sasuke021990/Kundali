@@ -177,7 +177,7 @@ Eight HTTP APIs and eight MCP servers call the same functions. One Docker image 
 | Panchanga | `get_daily_panchanga` | http://127.0.0.1:8741/panchanga/docs | http://127.0.0.1:8748/mcp |
 | Navamsha | `get_navamsha_json` | http://127.0.0.1:8741/navamsha/docs | http://127.0.0.1:8749/mcp |
 
-OpenAPI documents are on port 8741 at `/kundli/openapi.json`, `/timing/openapi.json`, `/forecast/openapi.json`, `/compatibility/openapi.json`, `/ashtakavarga/openapi.json`, `/saturn-cycles/openapi.json`, and `/panchanga/openapi.json`. ReDoc is the same path with `/redoc` instead of `/docs`. The index is at http://127.0.0.1:8741/ and JSON URLs are at http://127.0.0.1:8741/connections.
+OpenAPI documents are on port 8741 at `/kundli/openapi.json`, `/timing/openapi.json`, `/forecast/openapi.json`, `/compatibility/openapi.json`, `/ashtakavarga/openapi.json`, `/saturn-cycles/openapi.json`, `/panchanga/openapi.json`, and `/navamsha/openapi.json`. ReDoc is the same path with `/redoc` instead of `/docs`. The index is at http://127.0.0.1:8741/ and JSON URLs are at http://127.0.0.1:8741/connections.
 
 ### Run with Docker
 
