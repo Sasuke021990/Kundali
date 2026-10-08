@@ -7,6 +7,7 @@ Compatibility:  /compatibility/docs
 Ashtakavarga:   /ashtakavarga/docs
 Saturn cycles:  /saturn-cycles/docs
 Panchanga:      /panchanga/docs
+Navamsha:       /navamsha/docs
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from jyotish_api.service import (
     build_compatibility,
     build_forecast,
     build_kundli,
+    build_navamsha,
     build_panchanga,
     build_saturn_cycles,
     build_timing,
@@ -37,6 +39,7 @@ COMPATIBILITY_MCP_PORT = 8745
 ASHTAKAVARGA_MCP_PORT = 8746
 SATURN_MCP_PORT = 8747
 PANCHANGA_MCP_PORT = 8748
+NAVAMSHA_MCP_PORT = 8749
 
 
 class BirthBody(BaseModel):
@@ -112,6 +115,16 @@ class AshtakavargaBody(BaseModel):
         description="Optional civil date for transit_filter_status.",
     )
     target_time: str = Field("12:00", examples=["09:00"])
+
+
+class NavamshaBody(BaseModel):
+    natal_chart: dict[str, Any] | None = Field(
+        None,
+        description="Dict from the Kundli API. Omit it to send dob, tob, and location.",
+    )
+    dob: str | None = Field(None, examples=["1998-04-10"])
+    tob: str | None = Field(None, examples=["17:25"])
+    location: str | None = Field(None, examples=["Hubli, Karnataka"])
 
 
 class PanchangaBody(BaseModel):
@@ -287,6 +300,18 @@ Send `location` for the place where the action happens, or `latitude`,
 used only when no observer place is sent.
 """.strip()
 panchanga_api = _documented_app("Panchanga API", PANCHANGA_DESCRIPTION, "/panchanga")
+NAVAMSHA_DESCRIPTION = """
+D9 from the natal longitudes alone. Each sign is nine parts of 3°20'.
+Fire signs start at Aries, earth at Capricorn, air at Libra, water at Cancer.
+
+`d9_dignity` is Exalted, Debilitated, Own, or Neutral in that navamsha.
+Debilitated is neecha navamsha. `is_vargottama` is true when D1 and D9 are
+the same sign. Pushkara navamshas are two parts of each sign: fire 7 and 9,
+earth 3 and 5, air 6 and 8, water 2 and 4.
+
+Send a natal chart or birth details. The lagna is included beside the nine grahas.
+""".strip()
+navamsha_api = _documented_app("Navamsha API", NAVAMSHA_DESCRIPTION, "/navamsha")
 
 
 @kundli_api.post(
@@ -380,6 +405,18 @@ def ashtakavarga_bindus(body: AshtakavargaBody) -> dict[str, Any]:
         raise _failure(exc) from exc
 
 
+@navamsha_api.post(
+    "/chart",
+    summary="Navamsha, Vargottama, and Pushkara",
+    response_description="D9 sign and dignity for the lagna and nine grahas.",
+)
+def navamsha_chart(body: NavamshaBody) -> dict[str, Any]:
+    try:
+        return build_navamsha(body.natal_chart, body.dob, body.tob, body.location)
+    except ValueError as exc:
+        raise _failure(exc) from exc
+
+
 @panchanga_api.post(
     "/day",
     summary="Sunrise panchanga and Rahu, Yamaganda, Gulika",
@@ -434,6 +471,7 @@ def connection_card(host: str = "127.0.0.1") -> dict[str, Any]:
             "ashtakavarga": f"http://{host}:{API_PORT}/ashtakavarga/docs",
             "saturn_cycles": f"http://{host}:{API_PORT}/saturn-cycles/docs",
             "panchanga": f"http://{host}:{API_PORT}/panchanga/docs",
+            "navamsha": f"http://{host}:{API_PORT}/navamsha/docs",
         },
         "openapi": {
             "kundli": f"http://{host}:{API_PORT}/kundli/openapi.json",
@@ -443,6 +481,7 @@ def connection_card(host: str = "127.0.0.1") -> dict[str, Any]:
             "ashtakavarga": f"http://{host}:{API_PORT}/ashtakavarga/openapi.json",
             "saturn_cycles": f"http://{host}:{API_PORT}/saturn-cycles/openapi.json",
             "panchanga": f"http://{host}:{API_PORT}/panchanga/openapi.json",
+            "navamsha": f"http://{host}:{API_PORT}/navamsha/openapi.json",
         },
         "mcp": {
             "kundli": f"http://{host}:{KUNDLI_MCP_PORT}/mcp",
@@ -452,6 +491,7 @@ def connection_card(host: str = "127.0.0.1") -> dict[str, Any]:
             "ashtakavarga": f"http://{host}:{ASHTAKAVARGA_MCP_PORT}/mcp",
             "saturn_cycles": f"http://{host}:{SATURN_MCP_PORT}/mcp",
             "panchanga": f"http://{host}:{PANCHANGA_MCP_PORT}/mcp",
+            "navamsha": f"http://{host}:{NAVAMSHA_MCP_PORT}/mcp",
         },
     }
 
@@ -477,6 +517,7 @@ for mounted in (
     ashtakavarga_api,
     saturn_api,
     panchanga_api,
+    navamsha_api,
 ):
     mounted.add_middleware(
         CORSMiddleware,
@@ -492,6 +533,7 @@ app.mount("/compatibility", compatibility_api)
 app.mount("/ashtakavarga", ashtakavarga_api)
 app.mount("/saturn-cycles", saturn_api)
 app.mount("/panchanga", panchanga_api)
+app.mount("/navamsha", navamsha_api)
 
 
 @app.get("/health", include_in_schema=False)
@@ -515,6 +557,7 @@ def home() -> str:
         "ashtakavarga": "Ashtakavarga",
         "saturn_cycles": "Saturn cycles",
         "panchanga": "Panchanga",
+        "navamsha": "Navamsha",
     }
     rows = []
     for name, url in card["swagger"].items():
@@ -534,7 +577,7 @@ def home() -> str:
 </head>
 <body>
   <h1>Jyotish telemetry</h1>
-  <p>Seven HTTP APIs, from the natal chart through the local panchanga.</p>
+  <p>Eight HTTP APIs, from the natal chart through Navamsha.</p>
   <ul>
     {''.join(rows)}
   </ul>

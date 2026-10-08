@@ -151,9 +151,20 @@ gadag = get_daily_panchanga("2026-10-15", location="Gadag, Karnataka")
 print(gadag["daily_panchanga"]["inauspicious_windows"]["rahu_kaalam"])
 ```
 
+## Navamsha
+
+`get_navamsha_json` divides each natal longitude into navamshas of 3°20' without calling the ephemeris. Fire signs start at Aries, earth at Capricorn, air at Libra, and water at Cancer. The same sign in D1 and D9 is Vargottama. Debilitation in D9 is neecha navamsha. Pushkara parts are fire 7 and 9, earth 3 and 5, air 6 and 8, and water 2 and 4.
+
+```python
+from kundli import get_kundli_json
+
+chart = get_kundli_json("1998-04-10", "17:25", "Hubli, Karnataka")
+print(chart["navamsha_d9"]["planets"]["Jupiter"])
+```
+
 ## HTTP APIs and MCP servers
 
-Seven HTTP APIs and seven MCP servers call the same functions. One Docker image runs all of them.
+Eight HTTP APIs and eight MCP servers call the same functions. One Docker image runs all of them.
 
 | Service | What it calls | Swagger | MCP endpoint |
 | --- | --- | --- | --- |
@@ -164,6 +175,7 @@ Seven HTTP APIs and seven MCP servers call the same functions. One Docker image 
 | Ashtakavarga | `get_ashtakavarga_json` | http://127.0.0.1:8741/ashtakavarga/docs | http://127.0.0.1:8746/mcp |
 | Saturn cycles | `get_saturn_cycles` | http://127.0.0.1:8741/saturn-cycles/docs | http://127.0.0.1:8747/mcp |
 | Panchanga | `get_daily_panchanga` | http://127.0.0.1:8741/panchanga/docs | http://127.0.0.1:8748/mcp |
+| Navamsha | `get_navamsha_json` | http://127.0.0.1:8741/navamsha/docs | http://127.0.0.1:8749/mcp |
 
 OpenAPI documents are on port 8741 at `/kundli/openapi.json`, `/timing/openapi.json`, `/forecast/openapi.json`, `/compatibility/openapi.json`, `/ashtakavarga/openapi.json`, `/saturn-cycles/openapi.json`, and `/panchanga/openapi.json`. ReDoc is the same path with `/redoc` instead of `/docs`. The index is at http://127.0.0.1:8741/ and JSON URLs are at http://127.0.0.1:8741/connections.
 
@@ -173,13 +185,13 @@ OpenAPI documents are on port 8741 at `/kundli/openapi.json`, `/timing/openapi.j
 docker compose up --build
 ```
 
-The API container listens on 8741. The MCP containers listen on 8742–8748. Each container has a `GET /health` check. Chart calls need outbound access to OpenStreetMap Nominatim. Panchanga looks up elevation from Open-Meteo when `elevation_m` is omitted.
+The API container listens on 8741. The MCP containers listen on 8742–8749. Each container has a `GET /health` check. Chart calls need outbound access to OpenStreetMap Nominatim. Panchanga looks up elevation from Open-Meteo when `elevation_m` is omitted.
 
 One container can run every process instead of Compose:
 
 ```bash
 docker build -t jyotish-telemetry .
-docker run --rm -p 8741:8741 -p 8742:8742 -p 8743:8743 -p 8744:8744 -p 8745:8745 -p 8746:8746 -p 8747:8747 -p 8748:8748 jyotish-telemetry
+docker run --rm -p 8741:8741 -p 8742:8742 -p 8743:8743 -p 8744:8744 -p 8745:8745 -p 8746:8746 -p 8747:8747 -p 8748:8748 -p 8749:8749 jyotish-telemetry
 ```
 
 ### Run without Docker
@@ -195,6 +207,7 @@ MCP_PORT=8745 python -m mcp_servers.compatibility_server
 MCP_PORT=8746 python -m mcp_servers.ashtakavarga_server
 MCP_PORT=8747 python -m mcp_servers.saturn_server
 MCP_PORT=8748 python -m mcp_servers.panchanga_server
+MCP_PORT=8749 python -m mcp_servers.navamsha_server
 ```
 
 Start each process in its own terminal. `MCP_HOST` defaults to `0.0.0.0`.
@@ -308,6 +321,10 @@ The servers speak streamable HTTP at `/mcp` and answer JSON. In Cursor, add this
     "jyotish-panchanga": {
       "type": "http",
       "url": "http://127.0.0.1:8748/mcp"
+    },
+    "jyotish-navamsha": {
+      "type": "http",
+      "url": "http://127.0.0.1:8749/mcp"
     }
   }
 }
@@ -322,5 +339,6 @@ The servers speak streamable HTTP at `/mcp` and answer JSON. In Cursor, add this
 | jyotish-ashtakavarga | `get_ashtakavarga_json` | `natal_chart`, or `dob` + `tob` + `location`. `target_date` is optional. |
 | jyotish-saturn | `get_saturn_cycles` | `as_of_date`. Also `natal_chart`, or `dob` + `tob` + `location`. `as_of_time` defaults to `09:00`. |
 | jyotish-panchanga | `get_daily_panchanga` | `date`. Also `location`, or `latitude` + `longitude`, or a natal chart. |
+| jyotish-navamsha | `get_navamsha_json` | `natal_chart`, or `dob` + `tob` + `location`. |
 
-Health checks for the MCP processes are `GET http://127.0.0.1:8742/health` through `GET http://127.0.0.1:8746/health`. Those routes are not MCP tools.
+Health checks for the MCP processes are `GET http://127.0.0.1:8742/health` through `GET http://127.0.0.1:8749/health`. Those routes are not MCP tools.

@@ -14,10 +14,10 @@ RUN apt-get update \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
-COPY kundli.py compatibility.py ashtakavarga.py saturn_cycles.py panchanga.py .
+COPY kundli.py compatibility.py ashtakavarga.py saturn_cycles.py panchanga.py navamsha.py .
 COPY data ./data
 COPY jyotish_api ./jyotish_api
 COPY mcp_servers ./mcp_servers
 
-EXPOSE 8741 8742 8743 8744 8745 8746 8747 8748
+EXPOSE 8741 8742 8743 8744 8745 8746 8747 8748 8749
 CMD ["python", "-m", "jyotish_api.serve_all"]

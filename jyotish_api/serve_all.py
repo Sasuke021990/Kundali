@@ -25,6 +25,7 @@ COMMANDS = (
     [sys.executable, "-m", "mcp_servers.ashtakavarga_server"],
     [sys.executable, "-m", "mcp_servers.saturn_server"],
     [sys.executable, "-m", "mcp_servers.panchanga_server"],
+    [sys.executable, "-m", "mcp_servers.navamsha_server"],
 )
 
 

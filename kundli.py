@@ -2048,6 +2048,9 @@ def kundli_as_dict(chart: ChartData) -> dict[str, object]:
         "houses": houses,
     }
     payload["ashtakavarga"] = get_ashtakavarga_json(payload)
+    from navamsha import get_navamsha_json
+
+    payload["navamsha_d9"] = get_navamsha_json(payload)
     return payload
 
 
