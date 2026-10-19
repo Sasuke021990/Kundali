@@ -164,6 +164,8 @@ print(chart["navamsha_d9"]["planets"]["Jupiter"])
 
 ## HTTP APIs and MCP servers
 
+`FUNCTIONS.md` is the AI call map: every public function, the fields it returns, and which key to read. Curl examples for the same routes are below.
+
 Eight HTTP APIs and eight MCP servers call the same functions. One Docker image runs all of them. Dates are `YYYY-MM-DD`. Times are 24-hour `HH:MM` unless a service also accepts `HH:MM:SS`. A bad date, an unknown place, or a daylight-saving gap returns HTTP 400 with the message in `detail`.
 
 Chart calls need outbound access to OpenStreetMap Nominatim. Panchanga looks up elevation from Open-Meteo when `elevation_m` is omitted. Saturn ingresses are read from `data/saturn_sign_passages.json`. Navamsha does not call the ephemeris again.
